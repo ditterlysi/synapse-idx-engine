@@ -202,8 +202,10 @@ class SynapsePublisher:
         if sha256 and len(sha256) != 64:
             sha256 = None
         extraction_error = str(row.get("extraction_error") or "").strip() or None
-        downloaded = bool(local_path and sha256)
-        extracted = bool(text_path and not extraction_error)
+        size_bytes = _size_bytes(local_path)
+        text_hash = _text_hash(text_path)
+        downloaded = bool(sha256 and size_bytes is not None)
+        extracted = bool(text_hash and not extraction_error)
         extraction_status = "EXTRACTED" if extracted else ("FAILED" if extraction_error else "PENDING")
         return DisclosureFileUpsertItem(
             source_url=source_url,
@@ -212,14 +214,14 @@ class SynapsePublisher:
             content_type=str(row.get("content_type") or "").strip() or None,
             file_extension=suffix,
             sha256=sha256,
-            size_bytes=_size_bytes(local_path),
+            size_bytes=size_bytes,
             selected_for_analysis=bool(row.get("selected_for_analysis")),
             selection_category=str(row.get("selection_category") or "").strip() or None,
             selection_reason=_truncate(str(row.get("selection_reason") or "").strip(), 1000) or None,
             download_status="DOWNLOADED" if downloaded else "PENDING",
             extraction_status=extraction_status,
             extraction_method=str(row.get("extraction_method") or "").strip() or None,
-            extracted_text_hash=_text_hash(text_path),
+            extracted_text_hash=text_hash,
             extracted_text_ref=None,
             extraction_error=_truncate(extraction_error, 1000) if extraction_error else None,
             downloaded_at=str(row.get("downloaded_at") or "").strip() or None,
@@ -421,16 +423,19 @@ class SynapsePipelineRunner:
                         end_at=local_end,
                     )
             except Exception as exc:
-                client.update_run(
-                    run_id,
-                    UpdateRunRequest(
-                        status="FAILED",
-                        completed_at=_now_iso(),
-                        source_requests=budget.source_requests,
-                        error_code="ENGINE_RUN_FAILED",
-                        error_message=_truncate(str(exc) or type(exc).__name__, 1000),
-                    ),
-                )
+                try:
+                    client.update_run(
+                        run_id,
+                        UpdateRunRequest(
+                            status="FAILED",
+                            completed_at=_now_iso(),
+                            source_requests=budget.source_requests,
+                            error_code="ENGINE_RUN_FAILED",
+                            error_message=_truncate(str(exc) or type(exc).__name__, 1000),
+                        ),
+                    )
+                except Exception:
+                    pass
                 raise
             finally:
                 if pipeline is not None:
@@ -476,15 +481,37 @@ class SynapsePipelineRunner:
 
             coverage_committed = False
             if status == "COMPLETE":
-                client.commit_coverage(
-                    CoverageCommitRequest(
-                        run_id=run_id,
-                        scope="ALL",
-                        covered_from=requested_from,
-                        covered_to=requested_to,
+                try:
+                    client.commit_coverage(
+                        CoverageCommitRequest(
+                            run_id=run_id,
+                            scope="ALL",
+                            covered_from=requested_from,
+                            covered_to=requested_to,
+                        )
                     )
-                )
-                coverage_committed = True
+                    coverage_committed = True
+                except Exception as exc:
+                    status = "PARTIAL"
+                    error_code = "COVERAGE_COMMIT_FAILED"
+                    error_message = _truncate(f"coverage commit failed: {exc}", 1000)
+                    client.update_run(
+                        run_id,
+                        UpdateRunRequest(
+                            status=status,
+                            completed_at=_now_iso(),
+                            announcements_found=int(
+                                report.get("metadata_announcements_collected") or 0
+                            ),
+                            announcements_new=publish.announcements_created,
+                            files_downloaded=publish.files_downloaded,
+                            files_extracted=publish.files_extracted,
+                            analyses_completed=publish.analyses_completed,
+                            source_requests=budget.source_requests,
+                            error_code=error_code,
+                            error_message=error_message,
+                        ),
+                    )
 
             return SynapseRunResult(
                 run_id=run_id,
