@@ -4,6 +4,7 @@ import json
 from datetime import timedelta
 
 import typer
+from dateutil.parser import isoparse
 
 from .config import Settings
 from .daily_guardrails import DailyPolicy, DailyPolicyError
@@ -73,6 +74,18 @@ def _tighten_e2e_settings(settings: Settings) -> Settings:
             "extraction_workers": min(settings.extraction_workers, 2),
         }
     )
+
+
+def _validate_explicit_timestamp(value: str, label: str) -> None:
+    raw = value.strip()
+    if len(raw) == 10:
+        raise typer.BadParameter("E2E requires explicit timestamps; date-only windows are not allowed")
+    try:
+        parsed = isoparse(raw)
+    except (TypeError, ValueError) as exc:
+        raise typer.BadParameter(f"invalid {label} timestamp: {exc}") from exc
+    if parsed.tzinfo is None or parsed.utcoffset() is None:
+        raise typer.BadParameter(f"{label} must include an explicit timezone offset or Z")
 
 
 @app.command()
@@ -151,8 +164,9 @@ def e2e(
     """Run one tightly bounded live integration window; never schedules itself."""
     if not confirm_live_idx:
         raise typer.BadParameter("--confirm-live-idx is required for a live E2E run")
-    if len(start.strip()) == 10 or len(end.strip()) == 10:
-        raise typer.BadParameter("E2E requires explicit timestamps; date-only windows are not allowed")
+
+    _validate_explicit_timestamp(start, "--start")
+    _validate_explicit_timestamp(end, "--end")
 
     settings = Settings()
     issues = _live_e2e_issues(settings)
@@ -169,6 +183,8 @@ def e2e(
         raise typer.BadParameter("--end must be later than --start")
     if end_at - start_at > E2E_MAX_WINDOW:
         raise typer.BadParameter("live E2E window must be 2 hours or less")
+    if start_at.date() != end_at.date():
+        raise typer.BadParameter("live E2E must stay within one Asia/Jakarta calendar date")
 
     e2e_settings = _tighten_e2e_settings(settings)
     try:
