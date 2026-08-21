@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 from types import SimpleNamespace
 
 from typer.testing import CliRunner
@@ -93,40 +92,15 @@ def test_e2e_rejects_cross_jakarta_date_window(tmp_path) -> None:
     assert "one Asia/Jakarta calendar date" in result.output
 
 
-def test_e2e_runs_with_tightened_caps_and_no_schedule(tmp_path, monkeypatch) -> None:
-    captured: dict[str, object] = {}
+def test_e2e_blocks_automated_idx_website_collection(tmp_path, monkeypatch) -> None:
+    invoked = False
 
-    class FakeRunner:
+    class ForbiddenRunner:
         def __init__(self, settings):
-            captured["settings"] = settings
+            nonlocal invoked
+            invoked = True
 
-        def run_window(self, *, start_at, end_at):
-            captured["start_at"] = start_at
-            captured["end_at"] = end_at
-            return SimpleNamespace(
-                run_id="run-id",
-                status="COMPLETE",
-                coverage_committed=True,
-                report={"status": "completed", "scrape_complete": True},
-                publish=SimpleNamespace(
-                    announcements_available=1,
-                    announcements_created=1,
-                    files_published=1,
-                    files_downloaded=1,
-                    files_extracted=1,
-                    analyses_completed=1,
-                    partial_disclosures=0,
-                    errors=[],
-                ),
-                budget={
-                    "source_requests": 3,
-                    "attachments": 1,
-                    "download_bytes": 1024,
-                    "ai_documents": 1,
-                },
-            )
-
-    monkeypatch.setattr(synapse_cli, "SynapsePipelineRunner", FakeRunner)
+    monkeypatch.setattr(synapse_cli, "SynapsePipelineRunner", ForbiddenRunner)
     result = runner.invoke(
         synapse_cli.app,
         [
@@ -140,18 +114,69 @@ def test_e2e_runs_with_tightened_caps_and_no_schedule(tmp_path, monkeypatch) -> 
         env=_live_env(tmp_path),
     )
 
-    assert result.exit_code == 0, result.output
-    payload = json.loads(result.stdout)
-    assert payload["ok"] is True
-    assert payload["scheduleEnabled"] is False
-    assert payload["coverageCommitted"] is True
+    assert result.exit_code == 2
+    assert "approved/licensed source integration" in result.output
+    assert invoked is False
 
-    settings = captured["settings"]
-    assert settings.synapse_daily_max_source_requests == 12
-    assert settings.synapse_daily_max_attachments == 20
-    assert settings.synapse_daily_max_download_bytes == 100_000_000
-    assert settings.synapse_daily_max_ai_documents == 20
-    assert settings.synapse_daily_max_run_seconds == 900
-    assert settings.llm_concurrency == 2
-    assert settings.llm_per_announcement_concurrency == 2
-    assert settings.extraction_workers == 2
+
+def test_tighten_e2e_settings_preserves_bounded_caps() -> None:
+    settings = synapse_cli.Settings(
+        synapse_daily_max_source_requests=50,
+        synapse_daily_max_attachments=100,
+        synapse_daily_max_download_bytes=500_000_000,
+        synapse_daily_max_ai_documents=100,
+        synapse_daily_max_run_seconds=2700,
+        llm_concurrency=4,
+        llm_per_announcement_concurrency=4,
+        extraction_workers=4,
+    )
+
+    tightened = synapse_cli._tighten_e2e_settings(settings)
+    assert tightened.synapse_daily_max_source_requests == 12
+    assert tightened.synapse_daily_max_attachments == 20
+    assert tightened.synapse_daily_max_download_bytes == 100_000_000
+    assert tightened.synapse_daily_max_ai_documents == 20
+    assert tightened.synapse_daily_max_run_seconds == 900
+    assert tightened.llm_concurrency == 2
+    assert tightened.llm_per_announcement_concurrency == 2
+    assert tightened.extraction_workers == 2
+
+
+def test_e2e_report_surfaces_metadata_root_cause() -> None:
+    result = SimpleNamespace(
+        run_id="run-id",
+        status="PARTIAL",
+        coverage_committed=False,
+        report={
+            "status": "partial",
+            "scrape_complete": False,
+            "scrape_error": "IDX metadata collection remained incomplete",
+            "metadata_diagnostics": {
+                "complete": False,
+                "strategy": "collection-error",
+                "ranges": [{"reason": "IDX returned HTTP 403; conservative run stopped"}],
+            },
+        },
+        publish=SimpleNamespace(
+            announcements_available=0,
+            announcements_created=0,
+            files_published=0,
+            files_downloaded=0,
+            files_extracted=0,
+            analyses_completed=0,
+            partial_disclosures=0,
+            errors=[],
+        ),
+        budget={
+            "source_requests": 2,
+            "attachments": 0,
+            "download_bytes": 0,
+            "ai_documents": 0,
+        },
+    )
+
+    payload = synapse_cli._build_e2e_report(result)
+    assert payload["ok"] is False
+    assert payload["scrapeError"] == "IDX metadata collection remained incomplete"
+    assert payload["metadataDiagnostics"]["ranges"][0]["reason"].startswith("IDX returned HTTP 403")
+    assert payload["scheduleEnabled"] is False
