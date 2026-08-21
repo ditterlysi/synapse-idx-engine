@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from pydantic import Field
+from pydantic import Field, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -18,12 +18,12 @@ class Settings(BaseSettings):
     openrouter_allow_fallbacks: bool = False
     openrouter_require_parameters: bool = True
     openrouter_http_referer: str = ""
-    openrouter_app_title: str = "IDX Disclosure Digest"
+    openrouter_app_title: str = "Synapse IDX Engine"
 
     idx_base_url: str = "https://www.idx.co.id"
     idx_page_size: int = Field(default=50, ge=1, le=200)
     idx_request_delay_seconds: float = Field(default=0.35, ge=0)
-    idx_user_agent: str = "IDXDisclosureDigest/0.15.5"
+    idx_user_agent: str = "SynapseIDXEngine/0.16.0"
     idx_cookie: str = ""
     idx_transport: str = "auto"
     idx_browser_profile_dir: Path = Path("./data/browser-profile")
@@ -37,9 +37,8 @@ class Settings(BaseSettings):
     idx_429_jitter_seconds: float = Field(default=4.0, ge=0.0, le=30.0)
     # When IDX reports more rows than offset pagination actually exposes, retry
     # the shard from indexFrom=0 with a larger pageSize before falling back to
-    # expensive per-ticker reconstruction. The public endpoint only accepts
-    # day-granularity date filters, so this is the fastest correctness-preserving
-    # recovery path for busy days such as 183 disclosures in one calendar day.
+    # expensive per-ticker reconstruction. This remains available for explicit
+    # manual audit mode, but Synapse daily mode disables ticker fan-out.
     idx_wide_page_probe_size: int = Field(default=200, ge=50, le=1000)
     idx_wide_page_probe_max_size: int = Field(default=1000, ge=200, le=2000)
     idx_ticker_shard_delay_seconds: float = Field(default=1.0, ge=0.0, le=30.0)
@@ -50,6 +49,26 @@ class Settings(BaseSettings):
     # only missing gaps. A small calendar overlap can surround a gap boundary;
     # covered timestamps are filtered before downstream work.
     idx_incremental_overlap_days: float = Field(default=1.0, ge=0.0, le=7.0)
+
+    # Synapse integration. The engine never receives a Supabase service-role key;
+    # it writes through a narrow authenticated Synapse internal API instead.
+    synapse_internal_base_url: str = ""
+    synapse_ingestion_secret: SecretStr = SecretStr("")
+
+    # Conservative scheduled mode. Disabled until the Synapse API boundary and
+    # narrow-range E2E are verified. Daily mode is intentionally HTTP-only and
+    # must stop on access protection rather than switching to browser bypasses.
+    synapse_daily_enabled: bool = False
+    synapse_daily_transport: str = "http"
+    synapse_daily_request_delay_seconds: float = Field(default=1.5, ge=0.5, le=30.0)
+    synapse_daily_request_jitter_seconds: float = Field(default=0.35, ge=0.0, le=5.0)
+    synapse_daily_max_source_requests: int = Field(default=50, ge=1, le=500)
+    synapse_daily_max_attachments: int = Field(default=100, ge=1, le=1000)
+    synapse_daily_max_download_bytes: int = Field(default=500_000_000, ge=1_000_000)
+    synapse_daily_max_ai_documents: int = Field(default=100, ge=1, le=1000)
+    synapse_daily_max_run_seconds: int = Field(default=2700, ge=60, le=7200)
+    synapse_daily_allow_historical_backfill: bool = False
+    synapse_daily_allow_ticker_fanout: bool = False
 
     app_timezone: str = "Asia/Jakarta"
     data_dir: Path = Path("./data")

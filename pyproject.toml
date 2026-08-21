@@ -3,9 +3,9 @@ requires = ["setuptools>=70", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "idx-disclosure-digest"
-version = "0.15.5"
-description = "IDX disclosure scraper, document extractor, and per-company summarizer"
+name = "synapse-idx-engine"
+version = "0.16.0"
+description = "Synapse IDX disclosure ingestion, document extraction, and structured intelligence engine"
 requires-python = ">=3.11"
 dependencies = [
   "httpx[http2]>=0.27,<1",
@@ -31,6 +31,7 @@ dev = ["pytest>=8,<9", "ruff>=0.6,<1"]
 
 [project.scripts]
 idx-digest = "idx_digest.cli:app"
+synapse-idx-engine = "idx_digest.synapse_cli:app"
 
 [tool.setuptools.packages.find]
 where = ["src"]
