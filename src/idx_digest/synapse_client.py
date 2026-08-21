@@ -5,7 +5,25 @@ from urllib.parse import urlparse
 import httpx
 
 from .config import Settings
-from .synapse_contract import CreateRunRequest, CreateRunResponse, RelevanceRequest, RelevanceResponse
+from .synapse_contract import (
+    CommitAnalysisRequest,
+    CommitAnalysisResponse,
+    CoverageCommitRequest,
+    CoverageCommitResponse,
+    CreateRunRequest,
+    CreateRunResponse,
+    DisclosureFilesUpsertRequest,
+    DisclosureFilesUpsertResponse,
+    DisclosureUpsertRequest,
+    DisclosureUpsertResponse,
+    RelevanceRequest,
+    RelevanceResponse,
+    SynapseModel,
+    UpdateProcessingStatusRequest,
+    UpdateProcessingStatusResponse,
+    UpdateRunRequest,
+    UpdateRunResponse,
+)
 
 
 class SynapseClientConfigurationError(ValueError):
@@ -59,8 +77,12 @@ class SynapseClient:
     def __exit__(self, exc_type: object, exc: object, traceback: object) -> None:
         self.close()
 
-    def _post_json(self, path: str, payload: dict[str, object]) -> dict[str, object]:
-        response = self._client.post(path, json=payload)
+    @staticmethod
+    def _payload(request: SynapseModel) -> dict[str, object]:
+        return request.model_dump(mode="json", by_alias=True, exclude_unset=True)
+
+    def _request_json(self, method: str, path: str, payload: dict[str, object]) -> dict[str, object]:
+        response = self._client.request(method, path, json=payload)
         response.raise_for_status()
         data = response.json()
         if not isinstance(data, dict):
@@ -68,10 +90,54 @@ class SynapseClient:
         return data
 
     def create_run(self, request: CreateRunRequest) -> CreateRunResponse:
-        payload = request.model_dump(mode="json")
-        return CreateRunResponse.model_validate(self._post_json("/api/internal/idx/runs", payload))
+        data = self._request_json("POST", "/api/internal/idx/runs", self._payload(request))
+        return CreateRunResponse.model_validate(data)
+
+    def update_run(self, run_id: str, request: UpdateRunRequest) -> UpdateRunResponse:
+        data = self._request_json("PATCH", f"/api/internal/idx/runs/{run_id}", self._payload(request))
+        return UpdateRunResponse.model_validate(data)
 
     def resolve_relevance(self, tickers: list[str]) -> RelevanceResponse:
         request = RelevanceRequest(tickers=tickers)
-        payload = request.model_dump(mode="json")
-        return RelevanceResponse.model_validate(self._post_json("/api/internal/idx/relevance", payload))
+        data = self._request_json("POST", "/api/internal/idx/relevance", self._payload(request))
+        return RelevanceResponse.model_validate(data)
+
+    def upsert_disclosures(self, request: DisclosureUpsertRequest) -> DisclosureUpsertResponse:
+        data = self._request_json("POST", "/api/internal/idx/disclosures/upsert", self._payload(request))
+        return DisclosureUpsertResponse.model_validate(data)
+
+    def upsert_files(
+        self,
+        disclosure_id: str,
+        request: DisclosureFilesUpsertRequest,
+    ) -> DisclosureFilesUpsertResponse:
+        data = self._request_json(
+            "POST",
+            f"/api/internal/idx/disclosures/{disclosure_id}/files/upsert",
+            self._payload(request),
+        )
+        return DisclosureFilesUpsertResponse.model_validate(data)
+
+    def commit_analysis(self, disclosure_id: str, request: CommitAnalysisRequest) -> CommitAnalysisResponse:
+        data = self._request_json(
+            "POST",
+            f"/api/internal/idx/disclosures/{disclosure_id}/analysis",
+            self._payload(request),
+        )
+        return CommitAnalysisResponse.model_validate(data)
+
+    def update_processing_status(
+        self,
+        disclosure_id: str,
+        request: UpdateProcessingStatusRequest,
+    ) -> UpdateProcessingStatusResponse:
+        data = self._request_json(
+            "POST",
+            f"/api/internal/idx/disclosures/{disclosure_id}/status",
+            self._payload(request),
+        )
+        return UpdateProcessingStatusResponse.model_validate(data)
+
+    def commit_coverage(self, request: CoverageCommitRequest) -> CoverageCommitResponse:
+        data = self._request_json("POST", "/api/internal/idx/coverage/commit", self._payload(request))
+        return CoverageCommitResponse.model_validate(data)
