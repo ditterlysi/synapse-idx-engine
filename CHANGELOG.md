@@ -4,6 +4,22 @@ All notable changes and migration requirements are consolidated here. Upgrades p
 
 Use [INSTALLATION.md](INSTALLATION.md) for the current upgrade procedure. Historical archive/patch extraction commands have been removed because they no longer describe the current source tree.
 
+## 0.16.0
+
+### Synapse source-neutral integration
+
+- Added the authenticated Synapse Internal API client and conservative publishing boundary.
+- Added source-neutral `DisclosureSource` contracts with explicit completeness evidence.
+- Added the offline `synapse-source-manifest-v1` adapter with local path/hash safeguards.
+- Added the source-neutral local-staging ingestion runner that reuses the existing extraction, OpenRouter announcement-v3 analysis, conservative Synapse taxonomy mapper, and Internal API publishing path.
+- Added guarded `synapse-idx-engine manual-import` for controlled offline-source end-to-end development.
+- Manual imports require explicit publish confirmation, `manual-` external-ID namespacing, and bounded two-hour windows.
+- Manual imports remain non-authoritative for production coverage by default; successful processing can therefore report `processingOk=true` while the ingestion run remains `PARTIAL` and `coverageCommitted=false`.
+- Local attachment paths are never published. File metadata is sent only when a real HTTP(S) source URL exists; no URL is fabricated.
+- Reused conservative attachment, byte, AI-document, and runtime budgets for manual source processing.
+- Automated IDX public-website/internal-endpoint collection remains disabled under the source-compliance hold. No browser/CAPTCHA/proxy/rate-limit bypass or schedule was enabled.
+- Added offline runner and CLI regression tests plus operational documentation in `docs/MANUAL_IMPORT.md`.
+
 ## 0.15.5
 
 ### Coverage-aware incremental runs
@@ -78,167 +94,3 @@ Database migrations are additive. No data reset is required.
 ### Financial fairness hotfix
 
 - Recognized standalone `LK` statement PDFs as primary evidence.
-- Added priority yield so queued foreground reducers are not starved by new bulk chunks.
-- Separated generating work from provider/disclosure/validation waits in live counters.
-- Added request-class latency estimates.
-
-## 0.14.3
-
-### Long Document Engine
-
-- Added exact chunk plans, bounded intra-document parallelism, chunk checkpoints, retry reasons, and a conservative ordered combine stage.
-- Improved tail ETA for outstanding chunks and combine work.
-
-## 0.14.2
-
-### Live request progress
-
-- Added correlated request lifecycle states and live OpenRouter work cards.
-- Added estimated latency progress for non-streaming requests and exact pipeline counters.
-- Added received-character/chunk telemetry for streaming mode.
-
-## 0.14.1
-
-### Responsive GUI containment
-
-- Prevented long IDs, URLs, JSON, and paths from expanding the page beyond the viewport.
-- Added local ledger scrolling and narrower responsive layouts.
-
-## 0.14.0
-
-### Pipeline Observatory
-
-- Added live scheduler, extraction, provider, throughput, latency, and ETA metrics.
-- Persisted a performance report and conservative next-run tuning advice.
-- Kept source selection and mid-run concurrency policy unchanged.
-
-## 0.13.0
-
-### Intelligence triage
-
-- Added deterministic routine-filing triage after extraction.
-- Added safe post-extraction duplicate suppression with audit records.
-- Added adaptive provider concurrency and GUI controls for each optimization.
-
-Source download/extraction remains mandatory before these decisions. XLSX and PDF evidence are not near-deduplicated against each other.
-
-## 0.12.0
-
-### Pipeline Engine II
-
-- Added learned browser attachment transport, bounded background extraction, ticker-fair LLM scheduling, weighted stage priority, and extraction controls.
-- Retained single-owner browser access and bounded backpressure.
-
-## 0.11.0
-
-### Pipeline Engine
-
-- Replaced serial announcement execution with a fair market-wide scheduler.
-- Added global and per-disclosure logical limits while keeping SQLite checkpoints immediate.
-
-## 0.10.0
-
-### Signal Desk Library
-
-- Rebuilt the GUI as a durable Desk, Library, Companies, and Activity workspace.
-- Added isolated research profiles and saved UI state.
-- Preserved the original `data/` tree as the Main archive.
-
-## 0.4.4
-
-### Smart financial-source hotfix
-
-- Merged cached announcement JSON with durable attachment rows during financial refinement.
-- Preferred XLSX plus human-readable `LK`/report PDF and used generic statement PDFs as fallback.
-- Added zero-cost dry-run selection previews and full-bundle preflight.
-- Reduced financial chunks to at most 22,000 characters and improved malformed-JSON retry headroom.
-
-## 0.4.3
-
-### Smart financial-statement sources
-
-- Added primary financial source selection and persisted selection reasons.
-- Trimmed formatted workbook tails and labeled extracted rows.
-- Added cached financial refinement and listed-stocks-only default scope.
-
-## 0.4.2
-
-### Ticker audit and provenance
-
-- Added ticker inspection for process, prompt/output, claims/sources, and attachments.
-- Persisted exact LLM request/response audits for new work.
-- Added company claim-source IDs and separate download/extraction timestamps.
-
-Historical prompts that were never stored remain explicitly labeled reconstructed.
-
-## 0.4.1
-
-### Shareable all-company exports
-
-- Added zero-LLM combined Markdown/TXT exports in the GUI and CLI.
-- Kept issuer boundaries explicit and refreshed combined files atomically after commits.
-
-## 0.4.0
-
-### Cached company reducer
-
-- Added `reduce-cached` for completing company windows without contacting IDX or repeating earlier stages.
-- Added immediate commits, resumability, legacy announcement support, and a network-failure circuit breaker.
-
-Use `--force` only when intentionally replacing an existing exact-window company summary.
-
-## 0.3.9
-
-### Durable overnight runs and recovery
-
-- Persisted active GUI runs, event history, partial checkpoints, and recovery exports.
-- Marked unfinished runs interrupted after restart and added resume/open-checkpoint workflows.
-
-## 0.3.8
-
-### Prompt Studio and expanded schemas
-
-- Added editable prompt layers, template validation, profile hashes, and selective cache invalidation.
-- Added structured corporate-action, expansion, management/control, capital, regulatory, and scenario fields.
-- Kept few-shot examples as classification guidance only; issuer facts must come from issuer evidence.
-
-## 0.3.7
-
-### Local Signal Desk GUI
-
-- Added the local FastAPI workspace, background runs, SSE progress, and overlap prevention while retaining the CLI.
-
-## 0.3.6
-
-### Calm diagnostics
-
-- Separated concise terminal progress from detailed JSONL and Playwright traces.
-- Made browser network, cache, page, and raw-stream output explicitly opt-in.
-
-## 0.3.5.post1
-
-### Complete-source repair
-
-- Restored package modules omitted from an earlier partial 0.3.5 archive.
-- Preserved all runtime data and caches.
-
-## 0.3.5
-
-### Parallel document summaries
-
-- Parallelized independent document-summary calls within one announcement.
-- Kept shared-browser access and SQLite writes controlled.
-- Disabled simultaneous raw token streams to prevent interleaved JSON.
-
-## 0.3.4
-
-### Diagnostics and tracing
-
-- Added timestamped diagnostics, progress, browser tracing, structured streaming, and slowdown reporting.
-
-## 0.3.3
-
-### Summary-schema repair
-
-- Added strict structured output validation and automatic regeneration of invalid cached objects such as `{}`.
-- Required no database deletion; valid files and summaries remained reusable.
