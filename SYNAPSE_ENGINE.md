@@ -1,6 +1,6 @@
 # Synapse IDX Engine
 
-**Status:** pipeline wiring complete / manual live E2E gated  
+**Status:** pipeline/API wiring complete / automated source collection on compliance hold  
 **Version:** 0.16.0  
 **Product owner:** Synapse
 
@@ -12,7 +12,7 @@ The Python package remains `idx_digest` during the transition to avoid a risky a
 
 ### This repository owns
 
-- disclosure metadata collection;
+- disclosure source-adapter/runtime logic;
 - incremental coverage logic;
 - attachment selection/download;
 - PDF/XLSX/DOCX/HTML extraction;
@@ -50,11 +50,26 @@ P4 routine / administrative
 
 Portfolio status is decided by Synapse. The engine must not infer portfolio ownership from historical BUY presence.
 
+## Source compliance hold
+
+A controlled live run on 2026-08-21 reached the current IDX website/internal website endpoint and received HTTP 403. The conservative runtime correctly stopped immediately without browser fallback, proxy rotation, CAPTCHA bypass, ticker fan-out, attachment download, AI usage, or coverage commit.
+
+During the follow-up source audit, the current Indonesia Stock Exchange website Terms of Use were verified to state that non-commercial use may be allowed with source/date attribution but **web scraping/crawling is not permitted**. Therefore Synapse automated collection from the IDX public website or its website-internal endpoints is intentionally disabled.
+
+Relevant official pages:
+
+- IDX Terms of Use: https://www.idx.id/id/syarat-penggunaan
+- IDX Data Services: https://www.idx.id/id/produk/layanan-data-bei/
+
+IDX Data Services documents **IDX Data Reference** as the licensed product that includes financial statements, corporate actions, listed-company routine reports, material-information disclosures, and suspension/unsuspension reports. A compliant automated source adapter must be established before Synapse collection is re-enabled.
+
+This is a product/source-policy hold, not a failure of the Synapse ingestion boundary. `synapse-idx-engine api-check` remains valid because it contacts only Synapse and does not read IDX.
+
 ## Conservative scheduled policy
 
-Scheduled Synapse mode remains intentionally disabled until controlled live E2E approval.
+Scheduled Synapse mode remains intentionally disabled until an approved/licensed source adapter is integrated and controlled E2E approval is repeated.
 
-The gated Synapse runner enforces:
+The gated Synapse runner still enforces:
 
 ```text
 HTTP-only source transport
@@ -74,7 +89,7 @@ no CAPTCHA bypass
 no proxy/IP rotation
 ```
 
-Generic/manual research commands remain separate and keep their existing behavior.
+These guardrails remain applicable to any future authorized HTTP source adapter.
 
 ## Current milestone
 
@@ -101,51 +116,52 @@ Implemented:
 - offline end-to-end tests using temporary SQLite plus fake pipeline/API clients;
 - `synapse-idx-engine doctor` command;
 - `synapse-idx-engine api-check` command;
-- bounded manual `synapse-idx-engine e2e` command for the controlled live gate.
+- bounded E2E command structure, now source-compliance blocked until an approved adapter exists;
+- Windows `tzdata` dependency so `Asia/Jakarta` works on fresh Python installations;
+- E2E report helper that surfaces scrape errors and metadata diagnostics directly.
 
 Not enabled yet:
 
+- automated IDX website collection;
 - scheduled daily CLI execution;
 - GitHub Actions schedule;
 - automatic historical backfill.
 
-No controlled live IDX E2E should be considered approved until the manual command has completed successfully and the resulting Synapse records have been verified.
+## E2E gate
 
-## Manual live E2E gate
+The `e2e` command still validates its bounded window input but stops before creating any source request while the source-compliance hold is active.
 
-The `e2e` command is intentionally stricter than future scheduled defaults. It requires:
+Once an approved/licensed source adapter exists, the existing E2E design requires:
 
 - `SYNAPSE_DAILY_ENABLED=true` as an explicit live-run kill switch;
 - `SYNAPSE_INTERNAL_BASE_URL`;
 - `SYNAPSE_INGESTION_SECRET`;
 - `OPENROUTER_API_KEY`;
-- `--confirm-live-idx`;
+- explicit live confirmation;
 - explicit ISO timestamps with timezone offset or `Z`;
 - a window of at most two hours;
 - start/end within one Asia/Jakarta calendar date.
 
-The command additionally clamps the run to at most 12 source requests, 20 attachments, 100 MB downloaded, 20 AI documents, 15 minutes, and concurrency 2. It never creates or enables a schedule.
+The E2E settings clamp the run to at most 12 source requests, 20 attachments, 100 MB downloaded, 20 AI documents, 15 minutes, and concurrency 2. It never creates or enables a schedule.
 
-Example shape only — never commit secret values:
+`api-check` remains safe and useful:
 
 ```bash
 synapse-idx-engine api-check -t BBRI
-synapse-idx-engine e2e \
-  --start "2026-08-21T20:00:00+07:00" \
-  --end "2026-08-21T21:00:00+07:00" \
-  --confirm-live-idx
 ```
 
 ## Next gates
 
-1. merge the bounded manual-E2E command after CI is fully green;
-2. configure the existing `SYNAPSE_INGESTION_SECRET` in the local/runtime environment without exposing it in Git or chat;
-3. run `api-check` to confirm the authenticated boundary without contacting IDX;
-4. run one controlled two-hour-or-less live E2E window;
-5. verify run/disclosure/file/analysis/coverage state in Synapse and clean up any synthetic test data if used;
-6. repeat controlled E2E until stable;
-7. expose the gated scheduled daily execution;
-8. only after repeated successful live runs add the ~03:00 WIB GitHub Actions schedule.
+1. keep automated IDX website collection disabled;
+2. introduce a source-adapter boundary so ingestion is independent from the old website collector;
+3. choose and configure an approved source path, preferably the official licensed IDX Data Reference feed if available for the deployment context;
+4. alternatively support explicit user-provided/manual source files as a non-automated fallback for development/testing;
+5. map the approved source payload into the existing disclosure/file pipeline without changing the Synapse API contract;
+6. run offline fixture/contract tests for the new adapter;
+7. repeat a controlled live E2E only against the approved source;
+8. verify run/disclosure/file/analysis/coverage state in Synapse;
+9. expose gated scheduled daily execution only after repeated successful compliant-source runs;
+10. only then add the ~03:00 WIB GitHub Actions schedule.
 
 ## Local checks
 
@@ -156,4 +172,4 @@ pytest -q
 synapse-idx-engine doctor
 ```
 
-`doctor` does not contact IDX or Synapse.
+`doctor` does not contact IDX or Synapse. On Windows, the package now installs `tzdata` so `ZoneInfo("Asia/Jakarta")` works on a fresh Python installation.
