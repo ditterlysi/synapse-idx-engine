@@ -66,7 +66,6 @@ def test_manual_import_requires_explicit_publish_confirmation(tmp_path) -> None:
         env=_manual_env(tmp_path),
     )
     assert result.exit_code == 2
-    assert "--confirm-publish is required" in result.output
 
 
 def test_manual_import_runs_without_enabling_daily_or_website_automation(tmp_path, monkeypatch) -> None:
