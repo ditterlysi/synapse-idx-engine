@@ -2,7 +2,6 @@ from typing import Literal
 
 from pydantic import BaseModel, Field, field_validator
 
-
 Priority = Literal[0, 1, 2, 3, 4]
 
 
