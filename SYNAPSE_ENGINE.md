@@ -1,6 +1,6 @@
 # Synapse IDX Engine
 
-**Status:** pipeline/API wiring complete / automated source collection on compliance hold  
+**Status:** source-adapter foundation in progress / automated IDX website collection on compliance hold  
 **Version:** 0.16.0  
 **Product owner:** Synapse
 
@@ -14,7 +14,7 @@ The Python package remains `idx_digest` during the transition to avoid a risky a
 
 - disclosure source-adapter/runtime logic;
 - incremental coverage logic;
-- attachment selection/download;
+- attachment selection/download or local staging;
 - PDF/XLSX/DOCX/HTML extraction;
 - OCR fallback;
 - exact/near duplicate suppression;
@@ -65,6 +65,38 @@ IDX Data Services documents **IDX Data Reference** as the licensed product that 
 
 This is a product/source-policy hold, not a failure of the Synapse ingestion boundary. `synapse-idx-engine api-check` remains valid because it contacts only Synapse and does not read IDX.
 
+## Source-adapter foundation
+
+Synapse no longer needs to couple its product contract to one collector implementation. The source-neutral contract is defined in `src/idx_digest/source_contract.py` and the first adapter lives in `src/idx_digest/sources/manual_manifest.py`.
+
+The boundary normalizes:
+
+- source identity;
+- disclosure external ID, ticker, timestamp, title and optional metadata;
+- source/local attachment references;
+- requested window;
+- explicit completeness state;
+- coverage start/end evidence;
+- source diagnostics.
+
+A source result may set `complete=True` only when its coverage evidence fully contains the requested window. Duplicate normalized external IDs are rejected.
+
+The manual manifest adapter is intentionally offline-only. It:
+
+- reads `synapse-source-manifest-v1` JSON;
+- filters disclosures to the requested timezone-aware window;
+- uppercases tickers through the normalized contract;
+- accepts only relative local attachment paths beneath the manifest directory;
+- rejects absolute/path-traversal escapes;
+- verifies local file existence;
+- computes SHA-256 and optionally checks a supplied digest;
+- performs no network requests;
+- suppresses manual completeness claims by default.
+
+Controlled fixtures/tests may opt into manual completeness attestation, but the claimed coverage must still prove the entire requested window.
+
+See `docs/SOURCE_ADAPTERS.md` for the schema and invariants.
+
 ## Conservative scheduled policy
 
 Scheduled Synapse mode remains intentionally disabled until an approved/licensed source adapter is integrated and controlled E2E approval is repeated.
@@ -72,7 +104,7 @@ Scheduled Synapse mode remains intentionally disabled until an approved/licensed
 The gated Synapse runner still enforces:
 
 ```text
-HTTP-only source transport
+HTTP-only authorized source transport where applicable
 incremental collection only
 no automatic historical backfill
 no per-ticker mass fan-out
@@ -89,11 +121,9 @@ no CAPTCHA bypass
 no proxy/IP rotation
 ```
 
-These guardrails remain applicable to any future authorized HTTP source adapter.
+These guardrails remain applicable to any future authorized network source adapter.
 
 ## Current milestone
-
-The engine contains the offline-verified wiring layer between the existing local pipeline/cache and the typed Synapse Internal API.
 
 Implemented:
 
@@ -116,20 +146,24 @@ Implemented:
 - offline end-to-end tests using temporary SQLite plus fake pipeline/API clients;
 - `synapse-idx-engine doctor` command;
 - `synapse-idx-engine api-check` command;
-- bounded E2E command structure, now source-compliance blocked until an approved adapter exists;
+- bounded E2E command structure, source-compliance blocked until an approved adapter exists;
 - Windows `tzdata` dependency so `Asia/Jakarta` works on fresh Python installations;
-- E2E report helper that surfaces scrape errors and metadata diagnostics directly.
+- E2E report helper that surfaces scrape errors and metadata diagnostics directly;
+- source-neutral `DisclosureSource` protocol and normalized source models;
+- offline manual manifest source adapter with path/hash/completeness safeguards.
 
 Not enabled yet:
 
 - automated IDX website collection;
+- source-neutral downstream ingestion runner;
+- licensed IDX Data Reference adapter;
 - scheduled daily CLI execution;
 - GitHub Actions schedule;
 - automatic historical backfill.
 
 ## E2E gate
 
-The `e2e` command still validates its bounded window input but stops before creating any source request while the source-compliance hold is active.
+The `e2e` command validates its bounded window input but stops before creating any source request while the source-compliance hold is active.
 
 Once an approved/licensed source adapter exists, the existing E2E design requires:
 
@@ -153,13 +187,13 @@ synapse-idx-engine api-check -t BBRI
 ## Next gates
 
 1. keep automated IDX website collection disabled;
-2. introduce a source-adapter boundary so ingestion is independent from the old website collector;
-3. choose and configure an approved source path, preferably the official licensed IDX Data Reference feed if available for the deployment context;
-4. alternatively support explicit user-provided/manual source files as a non-automated fallback for development/testing;
-5. map the approved source payload into the existing disclosure/file pipeline without changing the Synapse API contract;
-6. run offline fixture/contract tests for the new adapter;
-7. repeat a controlled live E2E only against the approved source;
-8. verify run/disclosure/file/analysis/coverage state in Synapse;
+2. merge and validate the source-neutral contract plus offline manual manifest adapter;
+3. build a source-neutral ingestion runner that stages normalized disclosures/local attachments into the existing extraction + AI + Synapse publishing path;
+4. add an explicit manual-import CLI for controlled end-to-end development without network collection;
+5. keep manual imports non-authoritative for production coverage by default;
+6. design the future licensed IDX Data Reference adapter against the same source contract;
+7. run offline fixture/contract tests for the source-neutral runner;
+8. repeat controlled live E2E only against an approved source;
 9. expose gated scheduled daily execution only after repeated successful compliant-source runs;
 10. only then add the ~03:00 WIB GitHub Actions schedule.
 
@@ -172,4 +206,4 @@ pytest -q
 synapse-idx-engine doctor
 ```
 
-`doctor` does not contact IDX or Synapse. On Windows, the package now installs `tzdata` so `ZoneInfo("Asia/Jakarta")` works on a fresh Python installation.
+`doctor` does not contact IDX or Synapse. On Windows, the package installs `tzdata` so `ZoneInfo("Asia/Jakarta")` works on a fresh Python installation.
