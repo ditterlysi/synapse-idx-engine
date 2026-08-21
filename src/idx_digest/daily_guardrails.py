@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import threading
 from dataclasses import dataclass, field
 from time import monotonic
 
@@ -72,6 +73,7 @@ class DailyRunBudget:
     download_bytes: int = 0
     ai_documents: int = 0
     _started_at: float = field(default_factory=monotonic, repr=False)
+    _lock: threading.Lock = field(default_factory=threading.Lock, init=False, repr=False)
 
     def _check_time(self) -> None:
         if monotonic() - self._started_at > self.policy.max_run_seconds:
@@ -84,37 +86,42 @@ class DailyRunBudget:
 
     def consume_source_request(self, count: int = 1) -> None:
         self._ensure_non_negative(count, "source request count")
-        self._check_time()
-        if self.source_requests + count > self.policy.max_source_requests:
-            raise DailyBudgetExceeded("source request budget exceeded")
-        self.source_requests += count
+        with self._lock:
+            self._check_time()
+            if self.source_requests + count > self.policy.max_source_requests:
+                raise DailyBudgetExceeded("source request budget exceeded")
+            self.source_requests += count
 
     def consume_attachment(self, count: int = 1) -> None:
         self._ensure_non_negative(count, "attachment count")
-        self._check_time()
-        if self.attachments + count > self.policy.max_attachments:
-            raise DailyBudgetExceeded("attachment budget exceeded")
-        self.attachments += count
+        with self._lock:
+            self._check_time()
+            if self.attachments + count > self.policy.max_attachments:
+                raise DailyBudgetExceeded("attachment budget exceeded")
+            self.attachments += count
 
     def consume_download_bytes(self, count: int) -> None:
         self._ensure_non_negative(count, "download byte count")
-        self._check_time()
-        if self.download_bytes + count > self.policy.max_download_bytes:
-            raise DailyBudgetExceeded("download byte budget exceeded")
-        self.download_bytes += count
+        with self._lock:
+            self._check_time()
+            if self.download_bytes + count > self.policy.max_download_bytes:
+                raise DailyBudgetExceeded("download byte budget exceeded")
+            self.download_bytes += count
 
     def consume_ai_document(self, count: int = 1) -> None:
         self._ensure_non_negative(count, "AI document count")
-        self._check_time()
-        if self.ai_documents + count > self.policy.max_ai_documents:
-            raise DailyBudgetExceeded("AI document budget exceeded")
-        self.ai_documents += count
+        with self._lock:
+            self._check_time()
+            if self.ai_documents + count > self.policy.max_ai_documents:
+                raise DailyBudgetExceeded("AI document budget exceeded")
+            self.ai_documents += count
 
     def snapshot(self) -> dict[str, int]:
-        self._check_time()
-        return {
-            "source_requests": self.source_requests,
-            "attachments": self.attachments,
-            "download_bytes": self.download_bytes,
-            "ai_documents": self.ai_documents,
-        }
+        with self._lock:
+            self._check_time()
+            return {
+                "source_requests": self.source_requests,
+                "attachments": self.attachments,
+                "download_bytes": self.download_bytes,
+                "ai_documents": self.ai_documents,
+            }
