@@ -14,7 +14,6 @@ from .synapse_contract import (
     StructuredAnalysis,
 )
 
-
 TAXONOMY_VERSION = "synapse-taxonomy-v0.1-compat"
 BRIDGE_SCHEMA_VERSION = "announcement-v3-compat-v1"
 BRIDGE_PROMPT_SUFFIX = "+synapse-compat-v1"
@@ -46,7 +45,7 @@ _CATEGORY_PATTERNS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("DELISTING", ("delisting", "penghapusan pencatatan")),
     ("LISTING", ("listing", "pencatatan saham")),
     ("DIVIDEND", ("dividen", "dividend")),
-    ("REFINANCING", ("refinancing", "refinancing", "pembiayaan kembali")),
+    ("REFINANCING", ("refinancing", "pembiayaan kembali")),
     ("BOND", ("obligasi", "bond", "sukuk")),
     ("DEBT", ("utang", "debt", "pinjaman", "loan facility")),
     ("EARNINGS", ("laba", "earnings", "profit")),
