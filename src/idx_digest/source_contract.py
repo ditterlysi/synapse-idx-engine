@@ -115,6 +115,15 @@ class SourceWindowResult:
         ids = [item.external_id for item in self.disclosures]
         if len(ids) != len(set(ids)):
             raise SourceContractError("source result contains duplicate disclosure external_id values")
+        outside = [
+            item.external_id
+            for item in self.disclosures
+            if not (self.requested_start <= item.announced_at <= self.requested_end)
+        ]
+        if outside:
+            raise SourceContractError(
+                f"source result contains disclosures outside the requested window: {sorted(outside)!r}"
+            )
 
     def proves_requested_window(self) -> bool:
         if self.coverage_start is None or self.coverage_end is None:
