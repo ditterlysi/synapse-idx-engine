@@ -44,6 +44,22 @@ def test_e2e_requires_explicit_live_confirmation() -> None:
     assert "--confirm-live-idx is required" in result.output
 
 
+def test_e2e_rejects_naive_timestamp() -> None:
+    result = runner.invoke(
+        synapse_cli.app,
+        [
+            "e2e",
+            "--start",
+            "2026-08-21T20:00:00",
+            "--end",
+            "2026-08-21T21:00:00+07:00",
+            "--confirm-live-idx",
+        ],
+    )
+    assert result.exit_code != 0
+    assert "must include an explicit timezone offset or Z" in result.output
+
+
 def test_e2e_rejects_window_over_two_hours(tmp_path) -> None:
     result = runner.invoke(
         synapse_cli.app,
@@ -59,6 +75,23 @@ def test_e2e_rejects_window_over_two_hours(tmp_path) -> None:
     )
     assert result.exit_code != 0
     assert "2 hours or less" in result.output
+
+
+def test_e2e_rejects_cross_jakarta_date_window(tmp_path) -> None:
+    result = runner.invoke(
+        synapse_cli.app,
+        [
+            "e2e",
+            "--start",
+            "2026-08-21T23:30:00+07:00",
+            "--end",
+            "2026-08-22T00:30:00+07:00",
+            "--confirm-live-idx",
+        ],
+        env=_live_env(tmp_path),
+    )
+    assert result.exit_code != 0
+    assert "one Asia/Jakarta calendar date" in result.output
 
 
 def test_e2e_runs_with_tightened_caps_and_no_schedule(tmp_path, monkeypatch) -> None:
