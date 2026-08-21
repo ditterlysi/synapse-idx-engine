@@ -2,12 +2,15 @@ from __future__ import annotations
 
 import json
 from datetime import timedelta
+from pathlib import Path
 
 import typer
 from dateutil.parser import isoparse
 
 from .config import Settings
 from .daily_guardrails import DailyPolicy, DailyPolicyError
+from .source_ingestion import SourceIngestionRunner
+from .sources.manual_manifest import ManualManifestSource
 from .synapse_client import SynapseClient, SynapseClientConfigurationError
 from .synapse_pipeline import SynapsePipelineRunner
 from .timeutils import parse_boundary
@@ -51,6 +54,21 @@ def _live_e2e_issues(settings: Settings) -> list[str]:
         issues.append("SYNAPSE_INGESTION_SECRET is required")
     if not settings.openrouter_api_key.strip():
         issues.append("OPENROUTER_API_KEY is required for the live E2E analysis path")
+    return list(dict.fromkeys(issues))
+
+
+def _manual_import_issues(settings: Settings) -> list[str]:
+    issues: list[str] = []
+    try:
+        DailyPolicy.from_settings(settings)
+    except DailyPolicyError as exc:
+        issues.append(str(exc))
+    if not settings.synapse_internal_base_url.strip():
+        issues.append("SYNAPSE_INTERNAL_BASE_URL is required")
+    if not settings.synapse_ingestion_secret.get_secret_value().strip():
+        issues.append("SYNAPSE_INGESTION_SECRET is required")
+    if not settings.openrouter_api_key.strip():
+        issues.append("OPENROUTER_API_KEY is required for manual disclosure analysis")
     return list(dict.fromkeys(issues))
 
 
@@ -109,6 +127,33 @@ def _build_e2e_report(result) -> dict[str, object]:
             "filesPublished": result.publish.files_published,
             "filesDownloaded": result.publish.files_downloaded,
             "filesExtracted": result.publish.files_extracted,
+            "analysesCompleted": result.publish.analyses_completed,
+            "partialDisclosures": result.publish.partial_disclosures,
+            "errors": result.publish.errors,
+        },
+        "budget": result.budget,
+        "scheduleEnabled": False,
+    }
+
+
+def _build_manual_import_report(result) -> dict[str, object]:
+    return {
+        "ok": result.processing_ok,
+        "runId": result.run_id,
+        "status": result.status,
+        "processingOk": result.processing_ok,
+        "sourceId": result.source_id,
+        "sourceComplete": result.source_complete,
+        "sourceDiagnostics": result.source_diagnostics,
+        "coverageCommitted": result.coverage_committed,
+        "coverageAuthoritative": result.source_complete and result.coverage_committed,
+        "publish": {
+            "disclosuresAvailable": result.publish.disclosures_available,
+            "disclosuresCreated": result.publish.disclosures_created,
+            "attachmentsStaged": result.publish.attachments_staged,
+            "filesPublished": result.publish.files_published,
+            "filesExtracted": result.publish.files_extracted,
+            "documentsAnalyzed": result.publish.documents_analyzed,
             "analysesCompleted": result.publish.analyses_completed,
             "partialDisclosures": result.publish.partial_disclosures,
             "errors": result.publish.errors,
@@ -181,6 +226,72 @@ def api_check(
         ],
     }
     typer.echo(json.dumps(report, ensure_ascii=False, indent=2))
+
+
+@app.command("manual-import")
+def manual_import(
+    manifest: Path = typer.Option(..., "--manifest", help="Path to a synapse-source-manifest-v1 JSON file."),
+    start: str = typer.Option(..., "--start", help="Explicit ISO timestamp, including timezone."),
+    end: str = typer.Option(..., "--end", help="Explicit ISO timestamp, including timezone."),
+    confirm_publish: bool = typer.Option(
+        False,
+        "--confirm-publish",
+        help="Required acknowledgement that the import may call OpenRouter and write to Synapse.",
+    ),
+) -> None:
+    """Process a local manifest through extraction, AI, and Synapse without source-network access."""
+    if not confirm_publish:
+        raise typer.BadParameter("--confirm-publish is required for a manual import")
+
+    _validate_explicit_timestamp(start, "--start")
+    _validate_explicit_timestamp(end, "--end")
+    settings = Settings()
+    try:
+        start_at = parse_boundary(start, settings.app_timezone)
+        end_at = parse_boundary(end, settings.app_timezone)
+    except (TypeError, ValueError) as exc:
+        raise typer.BadParameter(f"invalid manual import window: {exc}") from exc
+
+    if end_at <= start_at:
+        raise typer.BadParameter("--end must be later than --start")
+    if end_at - start_at > E2E_MAX_WINDOW:
+        raise typer.BadParameter("manual import window must be 2 hours or less")
+    if start_at.date() != end_at.date():
+        raise typer.BadParameter("manual import must stay within one Asia/Jakarta calendar date")
+
+    issues = _manual_import_issues(settings)
+    if issues:
+        raise typer.BadParameter("; ".join(issues))
+
+    import_settings = _tighten_e2e_settings(settings)
+    source = ManualManifestSource(manifest, allow_complete_attestation=False)
+    try:
+        result = SourceIngestionRunner(
+            import_settings,
+            source,
+            allow_coverage_commit=False,
+            require_external_id_prefix="manual-",
+        ).run_window(start_at=start_at, end_at=end_at)
+    except Exception as exc:
+        typer.echo(
+            json.dumps(
+                {
+                    "ok": False,
+                    "errorType": type(exc).__name__,
+                    "error": str(exc),
+                    "coverageCommitted": False,
+                    "scheduleEnabled": False,
+                },
+                ensure_ascii=False,
+                indent=2,
+            )
+        )
+        raise typer.Exit(code=1) from exc
+
+    report = _build_manual_import_report(result)
+    typer.echo(json.dumps(report, ensure_ascii=False, indent=2))
+    if not report["ok"]:
+        raise typer.Exit(code=1)
 
 
 @app.command("e2e")

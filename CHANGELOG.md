@@ -4,6 +4,22 @@ All notable changes and migration requirements are consolidated here. Upgrades p
 
 Use [INSTALLATION.md](INSTALLATION.md) for the current upgrade procedure. Historical archive/patch extraction commands have been removed because they no longer describe the current source tree.
 
+## 0.16.0
+
+### Synapse source-neutral integration
+
+- Added the authenticated Synapse Internal API client and conservative publishing boundary.
+- Added source-neutral `DisclosureSource` contracts with explicit completeness evidence.
+- Added the offline `synapse-source-manifest-v1` adapter with local path/hash safeguards.
+- Added the source-neutral local-staging ingestion runner that reuses the existing extraction, OpenRouter announcement-v3 analysis, conservative Synapse taxonomy mapper, and Internal API publishing path.
+- Added guarded `synapse-idx-engine manual-import` for controlled offline-source end-to-end development.
+- Manual imports require explicit publish confirmation, `manual-` external-ID namespacing, and bounded two-hour windows.
+- Manual imports remain non-authoritative for production coverage by default; successful processing can therefore report `processingOk=true` while the ingestion run remains `PARTIAL` and `coverageCommitted=false`.
+- Local attachment paths are never published. File metadata is sent only when a real HTTP(S) source URL exists; no URL is fabricated.
+- Reused conservative attachment, byte, AI-document, and runtime budgets for manual source processing.
+- Automated IDX public-website/internal-endpoint collection remains disabled under the source-compliance hold. No browser/CAPTCHA/proxy/rate-limit bypass or schedule was enabled.
+- Added offline runner and CLI regression tests plus operational documentation in `docs/MANUAL_IMPORT.md`.
+
 ## 0.15.5
 
 ### Coverage-aware incremental runs
