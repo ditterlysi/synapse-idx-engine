@@ -79,7 +79,7 @@ class SynapseClient:
 
     @staticmethod
     def _payload(request: SynapseModel) -> dict[str, object]:
-        return request.model_dump(mode="json", by_alias=True, exclude_none=True)
+        return request.model_dump(mode="json", by_alias=True, exclude_unset=True)
 
     def _request_json(self, method: str, path: str, payload: dict[str, object]) -> dict[str, object]:
         response = self._client.request(method, path, json=payload)
