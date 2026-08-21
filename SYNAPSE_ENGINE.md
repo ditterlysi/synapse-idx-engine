@@ -1,6 +1,6 @@
 # Synapse IDX Engine
 
-**Status:** pipeline wiring complete / activation gated  
+**Status:** pipeline wiring complete / manual live E2E gated  
 **Version:** 0.16.0  
 **Product owner:** Synapse
 
@@ -78,7 +78,7 @@ Generic/manual research commands remain separate and keep their existing behavio
 
 ## Current milestone
 
-The engine now contains the offline-verified wiring layer between the existing local pipeline/cache and the typed Synapse Internal API.
+The engine contains the offline-verified wiring layer between the existing local pipeline/cache and the typed Synapse Internal API.
 
 Implemented:
 
@@ -96,26 +96,56 @@ Implemented:
 - deliberately `UNCLEAR` directional impact until native Synapse analysis provides explicit impact reasoning;
 - PARTIAL fallback when validated analysis is missing or publishing fails;
 - coverage commit only after a clean local run, clean publish, and proven requested-window coverage;
+- compensation back to PARTIAL when the final coverage commit fails;
+- thread-safe conservative budget counters;
 - offline end-to-end tests using temporary SQLite plus fake pipeline/API clients;
-- `synapse-idx-engine doctor` command.
+- `synapse-idx-engine doctor` command;
+- `synapse-idx-engine api-check` command;
+- bounded manual `synapse-idx-engine e2e` command for the controlled live gate.
 
 Not enabled yet:
 
-- live IDX execution through the Synapse runner;
-- production engine writes to Synapse;
-- daily CLI activation;
+- scheduled daily CLI execution;
 - GitHub Actions schedule;
 - automatic historical backfill.
 
+No controlled live IDX E2E should be considered approved until the manual command has completed successfully and the resulting Synapse records have been verified.
+
+## Manual live E2E gate
+
+The `e2e` command is intentionally stricter than future scheduled defaults. It requires:
+
+- `SYNAPSE_DAILY_ENABLED=true` as an explicit live-run kill switch;
+- `SYNAPSE_INTERNAL_BASE_URL`;
+- `SYNAPSE_INGESTION_SECRET`;
+- `OPENROUTER_API_KEY`;
+- `--confirm-live-idx`;
+- explicit ISO timestamps with timezone offset or `Z`;
+- a window of at most two hours;
+- start/end within one Asia/Jakarta calendar date.
+
+The command additionally clamps the run to at most 12 source requests, 20 attachments, 100 MB downloaded, 20 AI documents, 15 minutes, and concurrency 2. It never creates or enables a schedule.
+
+Example shape only — never commit secret values:
+
+```bash
+synapse-idx-engine api-check -t BBRI
+synapse-idx-engine e2e \
+  --start "2026-08-21T20:00:00+07:00" \
+  --end "2026-08-21T21:00:00+07:00" \
+  --confirm-live-idx
+```
+
 ## Next gates
 
-1. merge the offline pipeline-wiring PR after CI is fully green;
-2. configure the existing `SYNAPSE_INGESTION_SECRET` in the engine runtime without exposing it in Git or chat;
-3. run one controlled narrow-range live E2E against the already-verified Synapse Internal API;
-4. verify run/disclosure/file/analysis/coverage state in Synapse and clean up any synthetic test data;
-5. repeat controlled E2E until stable;
-6. expose the gated daily command;
-7. only after repeated successful live runs add the ~03:00 WIB GitHub Actions schedule.
+1. merge the bounded manual-E2E command after CI is fully green;
+2. configure the existing `SYNAPSE_INGESTION_SECRET` in the local/runtime environment without exposing it in Git or chat;
+3. run `api-check` to confirm the authenticated boundary without contacting IDX;
+4. run one controlled two-hour-or-less live E2E window;
+5. verify run/disclosure/file/analysis/coverage state in Synapse and clean up any synthetic test data if used;
+6. repeat controlled E2E until stable;
+7. expose the gated scheduled daily execution;
+8. only after repeated successful live runs add the ~03:00 WIB GitHub Actions schedule.
 
 ## Local checks
 
