@@ -137,6 +137,24 @@ def test_manual_manifest_rejects_coverage_that_does_not_cover_requested_window(t
         )
 
 
+def test_manual_manifest_rejects_naive_requested_window(tmp_path: Path) -> None:
+    source = ManualManifestSource(_write_manifest(tmp_path, _base_manifest()))
+    with pytest.raises(ManualManifestError, match="start_at must be timezone-aware"):
+        source.collect_window(
+            start_at=datetime(2026, 8, 21, 9, 0),
+            end_at=datetime(2026, 8, 21, 11, 0, tzinfo=JAKARTA),
+        )
+
+
+def test_manual_manifest_rejects_reversed_requested_window(tmp_path: Path) -> None:
+    source = ManualManifestSource(_write_manifest(tmp_path, _base_manifest()))
+    with pytest.raises(ManualManifestError, match="end_at must be greater"):
+        source.collect_window(
+            start_at=datetime(2026, 8, 21, 11, 0, tzinfo=JAKARTA),
+            end_at=datetime(2026, 8, 21, 9, 0, tzinfo=JAKARTA),
+        )
+
+
 def test_manual_manifest_rejects_attachment_path_escape(tmp_path: Path) -> None:
     outside = tmp_path.parent / "outside.pdf"
     outside.write_bytes(b"do not read")
