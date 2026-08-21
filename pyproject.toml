@@ -14,6 +14,7 @@ dependencies = [
   "pydantic>=2.8,<3",
   "pydantic-settings>=2.4,<3",
   "python-dateutil>=2.9,<3",
+  "tzdata>=2025.2; platform_system == 'Windows'",
   "PyMuPDF>=1.24,<2",
   "Pillow>=10,<12",
   "pytesseract>=0.3.13,<1",
