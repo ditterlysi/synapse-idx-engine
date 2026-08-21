@@ -57,6 +57,15 @@ def _aware_datetime(value: Any, label: str) -> datetime:
     return parsed
 
 
+def _validate_window(start_at: datetime, end_at: datetime) -> None:
+    if start_at.tzinfo is None or start_at.utcoffset() is None:
+        raise ManualManifestError("start_at must be timezone-aware")
+    if end_at.tzinfo is None or end_at.utcoffset() is None:
+        raise ManualManifestError("end_at must be timezone-aware")
+    if end_at <= start_at:
+        raise ManualManifestError("end_at must be greater than start_at")
+
+
 def _sha256(path: Path) -> str:
     digest = hashlib.sha256()
     with path.open("rb") as handle:
@@ -177,6 +186,7 @@ class ManualManifestSource:
         return True, start_at, end_at, diagnostics
 
     def collect_window(self, *, start_at: datetime, end_at: datetime) -> SourceWindowResult:
+        _validate_window(start_at, end_at)
         root = self._load()
         raw_disclosures = _list(root.get("disclosures"), "disclosures")
         parsed = [self._disclosure(value, index=index) for index, value in enumerate(raw_disclosures)]
