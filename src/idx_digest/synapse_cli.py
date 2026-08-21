@@ -20,6 +20,9 @@ E2E_MAX_ATTACHMENTS = 20
 E2E_MAX_DOWNLOAD_BYTES = 100_000_000
 E2E_MAX_AI_DOCUMENTS = 20
 E2E_MAX_RUN_SECONDS = 900
+SOURCE_COMPLIANCE_HOLD = (
+    "Automated IDX website collection is disabled pending an approved/licensed source integration"
+)
 
 
 def _integration_issues(settings: Settings) -> list[str]:
@@ -88,6 +91,32 @@ def _validate_explicit_timestamp(value: str, label: str) -> None:
         raise typer.BadParameter(f"{label} must include an explicit timezone offset or Z")
 
 
+def _build_e2e_report(result) -> dict[str, object]:
+    diagnostics = result.report.get("metadata_diagnostics")
+    return {
+        "ok": result.status == "COMPLETE" and result.coverage_committed,
+        "runId": result.run_id,
+        "status": result.status,
+        "coverageCommitted": result.coverage_committed,
+        "pipelineStatus": result.report.get("status"),
+        "scrapeComplete": result.report.get("scrape_complete"),
+        "scrapeError": result.report.get("scrape_error"),
+        "metadataDiagnostics": diagnostics if isinstance(diagnostics, dict) else None,
+        "publish": {
+            "announcementsAvailable": result.publish.announcements_available,
+            "announcementsCreated": result.publish.announcements_created,
+            "filesPublished": result.publish.files_published,
+            "filesDownloaded": result.publish.files_downloaded,
+            "filesExtracted": result.publish.files_extracted,
+            "analysesCompleted": result.publish.analyses_completed,
+            "partialDisclosures": result.publish.partial_disclosures,
+            "errors": result.publish.errors,
+        },
+        "budget": result.budget,
+        "scheduleEnabled": False,
+    }
+
+
 @app.command()
 def doctor() -> None:
     """Validate conservative-mode settings without contacting IDX or Synapse."""
@@ -103,6 +132,8 @@ def doctor() -> None:
             settings.synapse_internal_base_url.strip()
             and settings.synapse_ingestion_secret.get_secret_value().strip()
         ),
+        "sourceAutomationEnabled": False,
+        "sourceAutomationReason": SOURCE_COMPLIANCE_HOLD,
         "policy": None
         if policy is None
         else {
@@ -158,10 +189,10 @@ def e2e(
     confirm_live_idx: bool = typer.Option(
         False,
         "--confirm-live-idx",
-        help="Required acknowledgement that this command performs live IDX reads and Synapse writes.",
+        help="Required acknowledgement for a future authorized-source live validation.",
     ),
 ) -> None:
-    """Run one tightly bounded live integration window; never schedules itself."""
+    """Validate a bounded window once an approved/licensed source integration exists."""
     if not confirm_live_idx:
         raise typer.BadParameter("--confirm-live-idx is required for a live E2E run")
 
@@ -169,10 +200,6 @@ def e2e(
     _validate_explicit_timestamp(end, "--end")
 
     settings = Settings()
-    issues = _live_e2e_issues(settings)
-    if issues:
-        raise typer.BadParameter("; ".join(issues))
-
     try:
         start_at = parse_boundary(start, settings.app_timezone)
         end_at = parse_boundary(end, settings.app_timezone)
@@ -185,6 +212,16 @@ def e2e(
         raise typer.BadParameter("live E2E window must be 2 hours or less")
     if start_at.date() != end_at.date():
         raise typer.BadParameter("live E2E must stay within one Asia/Jakarta calendar date")
+
+    # The current collection implementation reads IDX website/internal website endpoints.
+    # IDX Terms of Use prohibit web scraping/crawling, so the Synapse automated path is
+    # intentionally held here until an approved/licensed source adapter replaces it.
+    raise typer.BadParameter(SOURCE_COMPLIANCE_HOLD)
+
+    # Kept structurally ready for the authorized-source adapter phase.
+    issues = _live_e2e_issues(settings)
+    if issues:
+        raise typer.BadParameter("; ".join(issues))
 
     e2e_settings = _tighten_e2e_settings(settings)
     try:
@@ -204,26 +241,7 @@ def e2e(
         )
         raise typer.Exit(code=1) from exc
 
-    report = {
-        "ok": result.status == "COMPLETE" and result.coverage_committed,
-        "runId": result.run_id,
-        "status": result.status,
-        "coverageCommitted": result.coverage_committed,
-        "pipelineStatus": result.report.get("status"),
-        "scrapeComplete": result.report.get("scrape_complete"),
-        "publish": {
-            "announcementsAvailable": result.publish.announcements_available,
-            "announcementsCreated": result.publish.announcements_created,
-            "filesPublished": result.publish.files_published,
-            "filesDownloaded": result.publish.files_downloaded,
-            "filesExtracted": result.publish.files_extracted,
-            "analysesCompleted": result.publish.analyses_completed,
-            "partialDisclosures": result.publish.partial_disclosures,
-            "errors": result.publish.errors,
-        },
-        "budget": result.budget,
-        "scheduleEnabled": False,
-    }
+    report = _build_e2e_report(result)
     typer.echo(json.dumps(report, ensure_ascii=False, indent=2))
     if not report["ok"]:
         raise typer.Exit(code=1)
@@ -237,8 +255,6 @@ def daily() -> None:
     if issues:
         raise typer.BadParameter("; ".join(issues))
     if not settings.synapse_daily_enabled:
-        typer.echo("Synapse daily collection is disabled. Keep it disabled until repeated live E2E approval.")
+        typer.echo("Synapse daily collection is disabled. Keep it disabled until an approved source is integrated.")
         raise typer.Exit(code=2)
-    raise SynapseClientConfigurationError(
-        "Scheduled daily execution is intentionally not activated yet; use the bounded e2e command for manual validation"
-    )
+    raise SynapseClientConfigurationError(SOURCE_COMPLIANCE_HOLD)
