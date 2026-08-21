@@ -73,6 +73,24 @@ def test_complete_source_result_requires_proven_coverage() -> None:
         )
 
 
+def test_source_result_rejects_disclosure_outside_requested_window() -> None:
+    start = datetime(2026, 8, 21, 9, 0, tzinfo=JAKARTA)
+    end = datetime(2026, 8, 21, 10, 0, tzinfo=JAKARTA)
+    disclosure = SourceDisclosure(
+        external_id="outside",
+        ticker="BBRI",
+        announced_at=datetime(2026, 8, 21, 10, 1, tzinfo=JAKARTA),
+        title="Outside",
+    )
+    with pytest.raises(SourceContractError, match="outside the requested window"):
+        SourceWindowResult(
+            source_id="test",
+            requested_start=start,
+            requested_end=end,
+            disclosures=(disclosure,),
+        )
+
+
 def test_manual_manifest_is_offline_filtered_and_non_authoritative_by_default(tmp_path: Path) -> None:
     docs = tmp_path / "docs"
     docs.mkdir()
