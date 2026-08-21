@@ -11,7 +11,12 @@ def _to_camel(value: str) -> str:
 
 
 class SynapseModel(BaseModel):
-    model_config = ConfigDict(alias_generator=_to_camel, populate_by_name=True, extra="forbid")
+    model_config = ConfigDict(
+        alias_generator=_to_camel,
+        populate_by_name=True,
+        extra="forbid",
+        str_strip_whitespace=True,
+    )
 
 
 Priority = Literal[0, 1, 2, 3, 4]
@@ -58,7 +63,7 @@ class TickerRelevance(SynapseModel):
     @field_validator("ticker")
     @classmethod
     def normalize_ticker(cls, value: str) -> str:
-        return value.strip().upper()
+        return value.upper()
 
     def model_post_init(self, __context: object) -> None:
         if self.is_portfolio and self.priority != 0:
@@ -106,7 +111,7 @@ class UpdateRunRequest(SynapseModel):
 
     @model_validator(mode="after")
     def validate_terminal_status(self) -> "UpdateRunRequest":
-        if not any(value is not None for value in self.__dict__.values()):
+        if not self.model_fields_set:
             raise ValueError("at least one run update field is required")
         if self.status and self.status != "RUNNING" and not self.completed_at:
             raise ValueError("terminal run status requires completed_at")
@@ -134,7 +139,7 @@ class DisclosureUpsertItem(SynapseModel):
     @field_validator("ticker")
     @classmethod
     def normalize_ticker(cls, value: str) -> str:
-        return value.strip().upper()
+        return value.upper()
 
 
 class DisclosureUpsertRequest(SynapseModel):
@@ -243,7 +248,7 @@ class StructuredAnalysis(SynapseModel):
     @field_validator("ticker")
     @classmethod
     def normalize_ticker(cls, value: str) -> str:
-        return value.strip().upper()
+        return value.upper()
 
     @model_validator(mode="after")
     def primary_category_is_tagged(self) -> "StructuredAnalysis":
