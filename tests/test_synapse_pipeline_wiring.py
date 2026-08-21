@@ -76,14 +76,14 @@ def _seed_database(settings: Settings, *, with_summary: bool = True) -> Database
         "pengumuman": {
             "Id2": "IDX-1",
             "Kode_Emiten": "BBRI",
-            "TglPengumuman": "21-08-2026 08:00:00",
+            "TglPengumuman": "2026-08-21T08:00:00+07:00",
             "JudulPengumuman": "Rencana belanja modal dan ekspansi",
             "NoPengumuman": "001/TEST/2026",
             "JenisPengumuman": "Keterbukaan Informasi",
             "PerihalPengumuman": "Ekspansi",
         }
     }
-    announced = parse_idx_datetime("21-08-2026 08:00:00", settings.app_timezone)
+    announced = parse_idx_datetime("2026-08-21T08:00:00+07:00", settings.app_timezone)
     db.upsert_announcement(raw, announced.isoformat())
     db.upsert_attachment(
         "IDX-1",
@@ -232,8 +232,8 @@ def test_legacy_mapper_is_conservative_about_impact() -> None:
 
 def test_runner_publishes_cached_pipeline_and_commits_coverage(tmp_path) -> None:
     settings = _settings(tmp_path)
-    start = parse_idx_datetime("21-08-2026 00:00:00", settings.app_timezone)
-    end = parse_idx_datetime("21-08-2026 23:00:00", settings.app_timezone)
+    start = parse_idx_datetime("2026-08-21T00:00:00+07:00", settings.app_timezone)
+    end = parse_idx_datetime("2026-08-21T23:00:00+07:00", settings.app_timezone)
     runner = SynapsePipelineRunner(
         settings,
         client_factory=FakeClient,
@@ -254,8 +254,8 @@ def test_runner_publishes_cached_pipeline_and_commits_coverage(tmp_path) -> None
 
 def test_runner_keeps_coverage_uncommitted_when_analysis_missing(tmp_path) -> None:
     settings = _settings(tmp_path)
-    start = parse_idx_datetime("21-08-2026 00:00:00", settings.app_timezone)
-    end = parse_idx_datetime("21-08-2026 23:00:00", settings.app_timezone)
+    start = parse_idx_datetime("2026-08-21T00:00:00+07:00", settings.app_timezone)
+    end = parse_idx_datetime("2026-08-21T23:00:00+07:00", settings.app_timezone)
     runner = SynapsePipelineRunner(
         settings,
         client_factory=FakeClient,
