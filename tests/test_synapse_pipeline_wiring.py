@@ -187,6 +187,12 @@ class FakeClient:
         return SimpleNamespace(coverage_id="coverage-id", created=True)
 
 
+class FailingCoverageClient(FakeClient):
+    def commit_coverage(self, request):
+        self.calls.append(("coverage", request))
+        raise RuntimeError("synthetic coverage failure")
+
+
 class FakePipeline:
     def __init__(self, settings: Settings, *, with_summary: bool = True):
         self.settings = settings
@@ -269,6 +275,27 @@ def test_runner_keeps_coverage_uncommitted_when_analysis_missing(tmp_path) -> No
     assert result.publish.partial_disclosures == 1
     assert client.final_run_status == "PARTIAL"
     assert client.coverage_committed is False
+
+
+def test_runner_downgrades_complete_when_coverage_commit_fails(tmp_path) -> None:
+    settings = _settings(tmp_path)
+    start = parse_idx_datetime("2026-08-21T00:00:00+07:00", settings.app_timezone)
+    end = parse_idx_datetime("2026-08-21T23:00:00+07:00", settings.app_timezone)
+    runner = SynapsePipelineRunner(
+        settings,
+        client_factory=FailingCoverageClient,
+        pipeline_factory=lambda runtime_settings: FakePipeline(runtime_settings),
+    )
+    result = runner.run_window(start_at=start, end_at=end)
+    client = FakeClient.latest
+    assert client is not None
+    assert result.status == "PARTIAL"
+    assert result.coverage_committed is False
+    assert client.final_run_status == "PARTIAL"
+    assert any(
+        name == "update_run" and getattr(request, "error_code", None) == "COVERAGE_COMMIT_FAILED"
+        for name, request in client.calls
+    )
 
 
 def test_conservative_client_stops_on_429_without_browser_fallback(tmp_path, monkeypatch) -> None:
