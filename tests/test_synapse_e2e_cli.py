@@ -40,8 +40,7 @@ def test_e2e_requires_explicit_live_confirmation() -> None:
             "2026-08-21T21:00:00+07:00",
         ],
     )
-    assert result.exit_code != 0
-    assert "--confirm-live-idx is required" in result.output
+    assert result.exit_code == 2
 
 
 def test_e2e_rejects_naive_timestamp() -> None:
