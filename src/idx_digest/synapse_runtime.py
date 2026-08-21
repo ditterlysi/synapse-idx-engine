@@ -8,8 +8,6 @@ from contextlib import contextmanager
 from dataclasses import dataclass, field
 from typing import Callable, Iterator
 
-import httpx
-
 from .daily_guardrails import DailyPolicy, DailyRunBudget
 from .downloader import AttachmentDownloader
 from .idx_client import IDXClient, IDXResponseError
