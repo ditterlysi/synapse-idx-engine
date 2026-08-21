@@ -9,6 +9,7 @@ from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 from typing import Any, Callable, Iterator
 from urllib.parse import urlparse
+from zoneinfo import ZoneInfo
 
 from .config import Settings
 from .daily_guardrails import DailyPolicy, DailyRunBudget
@@ -18,8 +19,8 @@ from .synapse_client import SynapseClient
 from .synapse_contract import (
     CoverageCommitRequest,
     CreateRunRequest,
-    DisclosureFileUpsertItem,
     DisclosureFilesUpsertRequest,
+    DisclosureFileUpsertItem,
     DisclosureUpsertItem,
     DisclosureUpsertRequest,
     UpdateProcessingStatusRequest,
@@ -33,7 +34,6 @@ from .synapse_runtime import (
     ConservativeRuntime,
     bind_runtime,
 )
-
 
 DISCLOSURE_BATCH_SIZE = 20
 
@@ -111,7 +111,7 @@ class SynapseRunResult:
 
 @contextmanager
 def _patched_pipeline_dependencies() -> Iterator[None]:
-    """Swap only the dependency names used by Pipeline.run, then restore them."""
+    """Swap only the dependencies used by Pipeline.run, then restore them."""
     from . import pipeline as pipeline_module
 
     original_client = pipeline_module.IDXClient
@@ -137,6 +137,8 @@ class SynapsePublisher:
         start_at: datetime,
         end_at: datetime,
     ) -> list[dict[str, Any]]:
+        start_value = start_at.isoformat()
+        end_value = end_at.isoformat()
         with db.connect() as conn:
             ticker_rows = conn.execute(
                 """
@@ -145,15 +147,15 @@ class SynapsePublisher:
                 WHERE announced_at BETWEEN ? AND ?
                 ORDER BY ticker
                 """,
-                (start_at.isoformat(), end_at.isoformat()),
+                (start_value, end_value),
             ).fetchall()
         announcements: list[dict[str, Any]] = []
         for ticker_row in ticker_rows:
-            bundle = db.company_audit_bundle(
-                str(ticker_row["ticker"]), start_at.isoformat(), end_at.isoformat()
-            )
+            bundle = db.company_audit_bundle(str(ticker_row["ticker"]), start_value, end_value)
             announcements.extend(bundle.get("announcements") or [])
-        announcements.sort(key=lambda item: (str(item.get("announced_at") or ""), str(item.get("id2") or "")))
+        announcements.sort(
+            key=lambda item: (str(item.get("announced_at") or ""), str(item.get("id2") or ""))
+        )
         return announcements
 
     @staticmethod
@@ -165,10 +167,13 @@ class SynapsePublisher:
                 raw = parsed
         except (TypeError, ValueError, json.JSONDecodeError):
             raw = {}
-        p = raw.get("pengumuman") if isinstance(raw.get("pengumuman"), dict) else {}
+        announcement = raw.get("pengumuman") if isinstance(raw.get("pengumuman"), dict) else {}
         metadata: dict[str, object] = {
             "source": "IDX",
-            "announcementNo": str(item.get("announcement_no") or p.get("NoPengumuman") or "") or None,
+            "announcementNo": str(
+                item.get("announcement_no") or announcement.get("NoPengumuman") or ""
+            )
+            or None,
             "legacyAnalysisMode": str(item.get("summary_analysis_mode") or "") or None,
             "legacyPromptVersion": str(item.get("summary_prompt_version") or "") or None,
         }
@@ -321,9 +326,7 @@ class SynapsePublisher:
 
 
 def _report_proves_window(report: dict[str, Any], start_at: datetime, end_at: datetime) -> bool:
-    if report.get("scrape_complete") is not True:
-        return False
-    if report.get("metadata_deferred_ranges"):
+    if report.get("scrape_complete") is not True or report.get("metadata_deferred_ranges"):
         return False
     ranges: list[CoverageRange] = []
     for item in report.get("metadata_coverage_after") or []:
@@ -338,7 +341,10 @@ def _report_proves_window(report: dict[str, Any], start_at: datetime, end_at: da
             )
         except (KeyError, TypeError, ValueError):
             continue
-    return any(value.start <= start_at and end_at <= value.end for value in normalize_coverage_ranges(ranges))
+    return any(
+        value.start <= start_at and end_at <= value.end
+        for value in normalize_coverage_ranges(ranges)
+    )
 
 
 class SynapsePipelineRunner:
@@ -371,23 +377,24 @@ class SynapsePipelineRunner:
             raise ValueError("end_at must be greater than start_at")
 
         policy = DailyPolicy.from_settings(self.settings)
-        policy.validate()
         runtime_settings = policy.apply_to_runtime(self.settings)
+        local_tz = ZoneInfo(runtime_settings.app_timezone)
+        local_start = start_at.astimezone(local_tz)
+        local_end = end_at.astimezone(local_tz)
         budget = DailyRunBudget(policy)
         runtime = self.runtime_factory(policy, budget)
         requested_from = _utc_iso(start_at)
         requested_to = _utc_iso(end_at)
 
         with self.client_factory(runtime_settings) as client:
-            created = client.create_run(
+            run_id = client.create_run(
                 CreateRunRequest(
                     mode="DAILY",
                     requested_from=requested_from,
                     requested_to=requested_to,
                     engine_version=_engine_version(),
                 )
-            )
-            run_id = created.run_id
+            ).run_id
             pipeline = None
             report: dict[str, Any] = {}
             publish = PublishStats()
@@ -398,8 +405,8 @@ class SynapsePipelineRunner:
                     if summarizer is not None:
                         pipeline.summarizer = BudgetedSummarizerProxy(summarizer, budget)
                     report = pipeline.run(
-                        start_at=start_at,
-                        end_at=end_at,
+                        start_at=local_start,
+                        end_at=local_end,
                         ticker=None,
                         keyword="",
                         max_announcements=None,
@@ -410,24 +417,20 @@ class SynapsePipelineRunner:
                     publish = SynapsePublisher(runtime_settings, client).publish_window(
                         db=pipeline.db,
                         run_id=run_id,
-                        start_at=start_at,
-                        end_at=end_at,
+                        start_at=local_start,
+                        end_at=local_end,
                     )
             except Exception as exc:
-                try:
-                    client.update_run(
-                        run_id,
-                        UpdateRunRequest(
-                            status="FAILED",
-                            completed_at=_now_iso(),
-                            source_requests=budget.source_requests,
-                            error_code="ENGINE_RUN_FAILED",
-                            error_message=_truncate(str(exc) or type(exc).__name__, 1000),
-                        ),
-                    )
-                finally:
-                    if pipeline is not None:
-                        pipeline.close()
+                client.update_run(
+                    run_id,
+                    UpdateRunRequest(
+                        status="FAILED",
+                        completed_at=_now_iso(),
+                        source_requests=budget.source_requests,
+                        error_code="ENGINE_RUN_FAILED",
+                        error_message=_truncate(str(exc) or type(exc).__name__, 1000),
+                    ),
+                )
                 raise
             finally:
                 if pipeline is not None:
@@ -436,12 +439,14 @@ class SynapsePipelineRunner:
                     except Exception:
                         pass
 
-            pipeline_complete = report.get("status") == "completed" and report.get("scrape_complete") is True
-            coverage_proven = _report_proves_window(report, start_at, end_at)
+            pipeline_complete = (
+                report.get("status") == "completed" and report.get("scrape_complete") is True
+            )
+            coverage_proven = _report_proves_window(report, local_start, local_end)
             complete = pipeline_complete and not publish.errors and coverage_proven
             status = "COMPLETE" if complete else "PARTIAL"
-            error_message = None
             error_code = None
+            error_message = None
             if not complete:
                 reasons: list[str] = []
                 if not pipeline_complete:
