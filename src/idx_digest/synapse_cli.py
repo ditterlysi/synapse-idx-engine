@@ -20,6 +20,7 @@ E2E_MAX_ATTACHMENTS = 20
 E2E_MAX_DOWNLOAD_BYTES = 100_000_000
 E2E_MAX_AI_DOCUMENTS = 20
 E2E_MAX_RUN_SECONDS = 900
+SOURCE_AUTOMATION_ENABLED = False
 SOURCE_COMPLIANCE_HOLD = (
     "Automated IDX website collection is disabled pending an approved/licensed source integration"
 )
@@ -132,8 +133,8 @@ def doctor() -> None:
             settings.synapse_internal_base_url.strip()
             and settings.synapse_ingestion_secret.get_secret_value().strip()
         ),
-        "sourceAutomationEnabled": False,
-        "sourceAutomationReason": SOURCE_COMPLIANCE_HOLD,
+        "sourceAutomationEnabled": SOURCE_AUTOMATION_ENABLED,
+        "sourceAutomationReason": None if SOURCE_AUTOMATION_ENABLED else SOURCE_COMPLIANCE_HOLD,
         "policy": None
         if policy is None
         else {
@@ -216,9 +217,9 @@ def e2e(
     # The current collection implementation reads IDX website/internal website endpoints.
     # IDX Terms of Use prohibit web scraping/crawling, so the Synapse automated path is
     # intentionally held here until an approved/licensed source adapter replaces it.
-    raise typer.BadParameter(SOURCE_COMPLIANCE_HOLD)
+    if not SOURCE_AUTOMATION_ENABLED:
+        raise typer.BadParameter(SOURCE_COMPLIANCE_HOLD)
 
-    # Kept structurally ready for the authorized-source adapter phase.
     issues = _live_e2e_issues(settings)
     if issues:
         raise typer.BadParameter("; ".join(issues))
@@ -257,4 +258,8 @@ def daily() -> None:
     if not settings.synapse_daily_enabled:
         typer.echo("Synapse daily collection is disabled. Keep it disabled until an approved source is integrated.")
         raise typer.Exit(code=2)
-    raise SynapseClientConfigurationError(SOURCE_COMPLIANCE_HOLD)
+    if not SOURCE_AUTOMATION_ENABLED:
+        raise SynapseClientConfigurationError(SOURCE_COMPLIANCE_HOLD)
+    raise SynapseClientConfigurationError(
+        "Scheduled daily execution is intentionally not activated yet; use bounded E2E validation first"
+    )
