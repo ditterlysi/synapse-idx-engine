@@ -54,7 +54,7 @@ jobs:
             --retry 2 --retry-delay 2 \
             --user-agent 'Mozilla/5.0 Synapse-Real-Document-Smoke/1.0' \
             --header 'Accept: application/pdf,*/*' \
-            'https://bri.co.id/web/guest/api/files/?path=%2Fsites%2Fdefault%2Ffiles%2Fdocuments%2FFakta%2BMaterial%2BAJB.pdf' \
+            'https://bri.co.id/web/guest/api/files/?path=%2Fsites%2Fdefault%2Ffiles%2Fdocuments%2FFakta+Material+AJB.pdf' \
             --output real-smoke/bbri-material.pdf
           python - <<'PY'
           from pathlib import Path
@@ -78,7 +78,7 @@ jobs:
               "sourceKind": "issuer-public-document-smoke-v1",
               "capturedAt": "2026-08-22T10:57:00+07:00",
               "captureMethod": "single-explicit-official-issuer-url",
-              "issuerDocumentUrl": "https://bri.co.id/web/guest/api/files/?path=%2Fsites%2Fdefault%2Ffiles%2Fdocuments%2FFakta%2BMaterial%2BAJB.pdf"
+              "issuerDocumentUrl": "https://bri.co.id/web/guest/api/files/?path=%2Fsites%2Fdefault%2Ffiles%2Fdocuments%2FFakta+Material+AJB.pdf"
             },
             "coverage": {
               "complete": false
@@ -91,7 +91,7 @@ jobs:
                 "title": "Report on Material Information or Facts - Sale of PT BRI Manajemen Investasi Shares",
                 "subject": "Sale of 65% of PT BRI Manajemen Investasi shares to PT Danantara Asset Management",
                 "disclosureType": "MATERIAL_INFORMATION",
-                "sourceUrl": "https://bri.co.id/web/guest/api/files/?path=%2Fsites%2Fdefault%2Ffiles%2Fdocuments%2FFakta%2BMaterial%2BAJB.pdf",
+                "sourceUrl": "https://bri.co.id/web/guest/api/files/?path=%2Fsites%2Fdefault%2Ffiles%2Fdocuments%2FFakta+Material+AJB.pdf",
                 "metadata": {
                   "issuer": "PT Bank Rakyat Indonesia (Persero) Tbk",
                   "issuerCode": "BBRI",
@@ -108,7 +108,7 @@ jobs:
                     "path": "bbri-material.pdf",
                     "filename": "BBRI_material_information_BRI_MI_sale_20260723.pdf",
                     "contentType": "application/pdf",
-                    "sourceUrl": "https://bri.co.id/web/guest/api/files/?path=%2Fsites%2Fdefault%2Ffiles%2Fdocuments%2FFakta%2BMaterial%2BAJB.pdf"
+                    "sourceUrl": "https://bri.co.id/web/guest/api/files/?path=%2Fsites%2Fdefault%2Ffiles%2Fdocuments%2FFakta+Material+AJB.pdf"
                   }
                 ]
               }
