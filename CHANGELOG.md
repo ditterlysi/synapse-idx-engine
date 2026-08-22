@@ -4,6 +4,24 @@ All notable changes and migration requirements are consolidated here. Upgrades p
 
 Use [INSTALLATION.md](INSTALLATION.md) for the current upgrade procedure. Historical archive/patch extraction commands have been removed because they no longer describe the current source tree.
 
+## 0.17.0
+
+### Guarded IDX website collector production release
+
+- Added production-tested HTTP-only IDX website collection for Synapse using the public announcement endpoint and official attachment hosts.
+- Added durable Synapse-backed source checkpoints with bounded seen-ID history and checkpoint advancement only after successful processing.
+- Added guarded daily command `synapse-idx-website daily --confirm-schedule` with 30-hour minimum lookback, checkpoint-based recovery, and 48-hour maximum window.
+- Added GitHub Actions daily workflow targeting 20:00 UTC / 03:00 Asia/Jakarta with `workflow_dispatch`, concurrency lock, and repository kill switch `IDX_DAILY_ENABLED=true`.
+- Scheduled mode keeps historical backfill, per-ticker fanout, browser fallback, proxy rotation, and CAPTCHA bypass disabled.
+- Scheduled website collection remains intentionally non-authoritative and never commits market-wide coverage.
+- Production run `401b3277-12f7-4962-a620-9b01d94000c1` passed processing with 9 source requests, 7/7 files extracted, 4 analyses completed, and durable checkpoint commit.
+- Immediate overlapping run `cc0ce9cd-1b82-45ed-abdc-568b929bdd7e` used 2 source requests and replayed 0 disclosures, attachments, extraction, or AI work, confirming production idempotency.
+- Fixed GitHub Actions failure masking caused by `tee` by enabling `set -o pipefail`.
+- Added Tesseract OCR plus English/Indonesian language packs to the GitHub-hosted scheduled runner after a real disclosure required OCR.
+- Documented production semantics where healthy website runs may persist `status=PARTIAL` and `error_code=SOURCE_COVERAGE_UNPROVEN` because `sourceComplete=false`; processing health is represented separately by `processingOk=true`.
+- Documented Synapse production dependency on the internal durable source-state endpoint and the requirement to rebuild current Synapse source before Wrangler deployment to avoid stale generated artifacts.
+- The workflow's GitHub Issue failure-alert step is currently unavailable while repository Issues are disabled; collector correctness and checkpoint safety do not depend on Issue creation.
+
 ## 0.16.0
 
 ### Synapse source-neutral integration
@@ -17,7 +35,7 @@ Use [INSTALLATION.md](INSTALLATION.md) for the current upgrade procedure. Histor
 - Manual imports remain non-authoritative for production coverage by default; successful processing can therefore report `processingOk=true` while the ingestion run remains `PARTIAL` and `coverageCommitted=false`.
 - Local attachment paths are never published. File metadata is sent only when a real HTTP(S) source URL exists; no URL is fabricated.
 - Reused conservative attachment, byte, AI-document, and runtime budgets for manual source processing.
-- Automated IDX public-website/internal-endpoint collection remains disabled under the source-compliance hold. No browser/CAPTCHA/proxy/rate-limit bypass or schedule was enabled.
+- Automated IDX public-website/internal-endpoint collection remained disabled under the earlier source-compliance hold at this release; that hold was superseded by the guarded production website collector documented in 0.17.0.
 - Added offline runner and CLI regression tests plus operational documentation in `docs/MANUAL_IMPORT.md`.
 
 ## 0.15.5
