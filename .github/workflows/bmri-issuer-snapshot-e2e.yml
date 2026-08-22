@@ -1,0 +1,148 @@
+name: BMRI Issuer Public Snapshot E2E
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - '.github/workflows/bmri-issuer-snapshot-e2e.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      AI_PROVIDER: gemini
+      GEMINI_MODEL: gemini-3.5-flash-lite
+      GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+      SYNAPSE_INTERNAL_BASE_URL: ${{ secrets.SYNAPSE_INTERNAL_BASE_URL || secrets.SYNAPSE_INTERNAL_URL || vars.SYNAPSE_INTERNAL_BASE_URL || vars.SYNAPSE_INTERNAL_URL }}
+      SYNAPSE_INGESTION_SECRET: ${{ secrets.SYNAPSE_INGESTION_SECRET || secrets.IDX_INGESTION_SECRET }}
+      SOURCE_PAGE: 'https://www.bankmandiri.co.id/en/web/guest/news-detail?backUrl=%2Fen%2Fnews%3F_MandiriNewsPortlet_year%3D2025&p_p_id=MandiriNewsPortlet&p_p_lifecycle=0&p_p_mode=view&p_p_state=normal&primaryKey=515073832'
+      PDF_URL: 'https://www.bankmandiri.co.id/documents/20143/0/MANDIRI%2B-%2BPROSRING%2BNOV25%2B-%2BREV5%2B-%2B%28Final%29.pdf/d9ceabd1-26ac-e090-bff4-102fd7129a39?t=1764564053265'
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install engine
+        run: python -m pip install -e .
+
+      - name: Validate runtime secrets
+        shell: bash
+        run: |
+          test -n "$GEMINI_API_KEY" || { echo 'Missing GEMINI_API_KEY'; exit 1; }
+          test -n "$SYNAPSE_INTERNAL_BASE_URL" || { echo 'Missing SYNAPSE_INTERNAL_BASE_URL'; exit 1; }
+          test -n "$SYNAPSE_INGESTION_SECRET" || { echo 'Missing SYNAPSE_INGESTION_SECRET'; exit 1; }
+
+      - name: Stage official Bank Mandiri PDF
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p issuer-snapshot/files
+          curl --fail --location --silent --show-error --retry 2 \
+            --user-agent 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/151 Safari/537.36' \
+            --referer "$SOURCE_PAGE" \
+            "$PDF_URL" -o issuer-snapshot/files/bmri-sustainability-bond-prospectus.pdf
+          python - <<'PY'
+          from pathlib import Path
+          path = Path('issuer-snapshot/files/bmri-sustainability-bond-prospectus.pdf')
+          data = path.read_bytes()
+          if len(data) < 20_000:
+              raise SystemExit(f'official PDF unexpectedly small: {len(data)} bytes')
+          if not data.startswith(b'%PDF-'):
+              raise SystemExit('official Bank Mandiri source did not return a PDF')
+          print(f'{path}: {len(data)} bytes, PDF validated')
+          PY
+
+      - name: Build issuer-public snapshot manifest
+        shell: python
+        run: |
+          import json
+          import os
+          from pathlib import Path
+
+          payload = {
+              'schemaVersion': 'synapse-source-manifest-v1',
+              'metadata': {
+                  'sourceKind': 'issuer-public-snapshot-v1',
+                  'issuerTicker': 'BMRI',
+                  'issuerHosts': ['bankmandiri.co.id'],
+                  'sourcePage': os.environ['SOURCE_PAGE'],
+                  'capturedAt': '2026-08-22T16:00:53+07:00',
+              },
+              'coverage': {
+                  'complete': False,
+                  'startAt': '2025-12-01T11:11:50+07:00',
+                  'endAt': '2025-12-01T12:11:50+07:00',
+              },
+              'disclosures': [{
+                  'externalId': 'issuer-public-bmri-20251201-114150-sustainability-bond-prospectus',
+                  'ticker': 'BMRI',
+                  'announcedAt': '2025-12-01T11:41:50+07:00',
+                  'title': 'Prospektus Ringkas Penawaran Umum Berkelanjutan Obligasi Keberlanjutan Berkelanjutan I Bank Mandiri',
+                  'subject': 'Program sustainability bond target Rp20 trillion; Phase I 2025 up to Rp5 trillion',
+                  'disclosureType': 'BOND',
+                  'sourceUrl': os.environ['SOURCE_PAGE'],
+                  'metadata': {
+                      'timestampEvidence': 'Official Bank Mandiri search index displays Mon Dec 01 11:41:50 GMT+07:00 2025',
+                      'timestampPrecision': 'SECOND_VERIFIED_ON_ISSUER_SEARCH_INDEX',
+                  },
+                  'attachments': [{
+                      'path': 'files/bmri-sustainability-bond-prospectus.pdf',
+                      'filename': 'bmri-sustainability-bond-prospectus.pdf',
+                      'contentType': 'application/pdf',
+                      'sourceUrl': os.environ['PDF_URL'],
+                  }],
+              }],
+          }
+          Path('issuer-snapshot/manifest.json').write_text(
+              json.dumps(payload, ensure_ascii=False, indent=2), encoding='utf-8'
+          )
+
+      - name: Import through durable issuer-public adapter
+        shell: bash
+        run: |
+          set -euo pipefail
+          synapse-issuer-public-snapshot \
+            --manifest issuer-snapshot/manifest.json \
+            --start '2025-12-01T11:11:50+07:00' \
+            --end '2025-12-01T12:11:50+07:00' \
+            --confirm-publish > issuer-report.json
+          cat issuer-report.json
+
+      - name: Verify conservative issuer-public semantics
+        shell: python
+        run: |
+          import json
+          report = json.loads(open('issuer-report.json', encoding='utf-8').read())
+          assert report['ok'] is True, report
+          assert report['processingOk'] is True, report
+          assert report['status'] == 'PARTIAL', report
+          assert report['sourceId'] == 'issuer-public-snapshot', report
+          assert report['sourceComplete'] is False, report
+          assert report['coverageCommitted'] is False, report
+          assert report['coverageAuthoritative'] is False, report
+          assert report['scheduleEnabled'] is False, report
+          assert report['sourceNetworkAccess'] is False, report
+          assert report['publish']['disclosuresAvailable'] == 1, report
+          assert report['publish']['disclosuresCreated'] == 1, report
+          assert report['publish']['filesExtracted'] == 1, report
+          assert report['publish']['documentsAnalyzed'] == 1, report
+          assert report['publish']['analysesCompleted'] == 1, report
+          assert report['publish']['errors'] == [], report
+          assert report['budget']['source_requests'] == 0, report
+          print(json.dumps({
+              'runId': report['runId'],
+              'status': report['status'],
+              'created': report['publish']['disclosuresCreated'],
+              'analysesCompleted': report['publish']['analysesCompleted'],
+              'coverageCommitted': report['coverageCommitted'],
+              'sourceRequests': report['budget']['source_requests'],
+          }, sort_keys=True))
