@@ -1,4 +1,4 @@
-name: Real BBRI Snapshot Smoke
+name: Real BBRI Document Smoke
 
 on:
   pull_request:
@@ -46,63 +46,69 @@ jobs:
       - name: Verify BBRI relevance boundary
         run: synapse-idx-engine api-check -t BBRI
 
-      - name: Download one explicit issuer-hosted BBRI disclosure PDF
+      - name: Download one explicit official BRI disclosure PDF
         shell: bash
         run: |
           mkdir -p real-smoke
           curl --fail --silent --show-error --location \
             --retry 2 --retry-delay 2 \
-            'https://www.ir-bri.com/newsroom/c21035bb89_c093fef910.pdf' \
+            --user-agent 'Mozilla/5.0 Synapse-Real-Document-Smoke/1.0' \
+            --header 'Accept: application/pdf,*/*' \
+            'https://bri.co.id/web/guest/api/files/?path=%2Fsites%2Fdefault%2Ffiles%2Fdocuments%2FFakta%2BMaterial%2BAJB.pdf' \
             --output real-smoke/bbri-material.pdf
           python - <<'PY'
           from pathlib import Path
           path = Path('real-smoke/bbri-material.pdf')
           data = path.read_bytes()
           if not data.startswith(b'%PDF'):
-              raise SystemExit('issuer document is not a PDF')
+              preview = data[:120].decode('utf-8', errors='replace').replace('\n', ' ')
+              raise SystemExit(f'issuer document is not a PDF; first bytes: {preview!r}')
           if len(data) > 10_000_000:
               raise SystemExit('issuer document exceeds 10 MB smoke-test cap')
-          print(f'issuer PDF verified: {len(data)} bytes')
+          print(f'official BRI PDF verified: {len(data)} bytes')
           PY
 
-      - name: Build non-authoritative official IDX public snapshot manifest
+      - name: Build source-neutral real BBRI manifest
         shell: bash
         run: |
           cat > real-smoke/manifest.json <<'JSON'
           {
             "schemaVersion": "synapse-source-manifest-v1",
             "metadata": {
-              "sourceKind": "idx-public-snapshot-v1",
-              "sourcePage": "https://www.idx.id/en/listed-companies/disclosure/",
+              "sourceKind": "issuer-public-document-smoke-v1",
               "capturedAt": "2026-08-22T10:57:00+07:00",
-              "captureMethod": "single-explicit-smoke-test",
-              "issuerDocumentUrl": "https://www.ir-bri.com/newsroom/c21035bb89_c093fef910.pdf"
+              "captureMethod": "single-explicit-official-issuer-url",
+              "issuerDocumentUrl": "https://bri.co.id/web/guest/api/files/?path=%2Fsites%2Fdefault%2Ffiles%2Fdocuments%2FFakta%2BMaterial%2BAJB.pdf"
             },
             "coverage": {
               "complete": false
             },
             "disclosures": [
               {
-                "externalId": "idx-public-bbri-20260119-transfer-share",
+                "externalId": "manual-real-bbri-20260723-bri-mi-sale",
                 "ticker": "BBRI",
-                "announcedAt": "2026-01-19T15:04:00+07:00",
-                "title": "The Transfer of Share of PT Bank Rakyat Indonesia (Persero) Tbk",
-                "subject": "Material information or facts report - transfer of share",
+                "announcedAt": "2026-07-23T03:56:00+07:00",
+                "title": "Report on Material Information or Facts - Sale of PT BRI Manajemen Investasi Shares",
+                "subject": "Sale of 65% of PT BRI Manajemen Investasi shares to PT Danantara Asset Management",
                 "disclosureType": "MATERIAL_INFORMATION",
-                "sourceUrl": "https://www.ir-bri.com/newsroom/c21035bb89_c093fef910.pdf",
+                "sourceUrl": "https://bri.co.id/web/guest/api/files/?path=%2Fsites%2Fdefault%2Ffiles%2Fdocuments%2FFakta%2BMaterial%2BAJB.pdf",
                 "metadata": {
                   "issuer": "PT Bank Rakyat Indonesia (Persero) Tbk",
                   "issuerCode": "BBRI",
-                  "letterNumber": "B.5.e-CSC/CSM/CGC/01/2026",
-                  "eventDate": "2026-01-05",
-                  "documentOrigin": "issuer-investor-relations"
+                  "letterNumber": "B.178.e-CSC/CSM/CGC/07/2026",
+                  "eventDate": "2026-07-22",
+                  "buyer": "PT Danantara Asset Management",
+                  "target": "PT BRI Manajemen Investasi",
+                  "sharesTransferred": 19500000,
+                  "ownershipTransferredPct": 65,
+                  "documentOrigin": "official-bri-website"
                 },
                 "attachments": [
                   {
                     "path": "bbri-material.pdf",
-                    "filename": "BBRI_material_information_transfer_share_20260119.pdf",
+                    "filename": "BBRI_material_information_BRI_MI_sale_20260723.pdf",
                     "contentType": "application/pdf",
-                    "sourceUrl": "https://www.ir-bri.com/newsroom/c21035bb89_c093fef910.pdf"
+                    "sourceUrl": "https://bri.co.id/web/guest/api/files/?path=%2Fsites%2Fdefault%2Ffiles%2Fdocuments%2FFakta%2BMaterial%2BAJB.pdf"
                   }
                 ]
               }
@@ -110,21 +116,21 @@ jobs:
           }
           JSON
 
-      - name: Run real BBRI public snapshot smoke test
+      - name: Run real BBRI source-neutral smoke test
         shell: bash
         run: |
           set -o pipefail
-          synapse-idx-public-snapshot \
+          synapse-idx-engine manual-import \
             --manifest ./real-smoke/manifest.json \
-            --start '2026-01-19T14:30:00+07:00' \
-            --end '2026-01-19T15:30:00+07:00' \
+            --start '2026-07-23T03:30:00+07:00' \
+            --end '2026-07-23T04:30:00+07:00' \
             --confirm-publish | tee real-smoke-report.json
 
       - name: Upload smoke report
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: real-bbri-public-snapshot-smoke-report
+          name: real-bbri-document-smoke-report
           path: real-smoke-report.json
           retention-days: 3
           if-no-files-found: ignore
