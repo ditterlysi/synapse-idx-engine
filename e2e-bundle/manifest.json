@@ -1,0 +1,25 @@
+{
+  "schemaVersion": "synapse-source-manifest-v1",
+  "coverage": {
+    "complete": false,
+    "startAt": "2026-08-22T06:00:00+07:00",
+    "endAt": "2026-08-22T08:00:00+07:00"
+  },
+  "disclosures": [
+    {
+      "externalId": "manual-e2e-bbri-20260822-001",
+      "ticker": "BBRI",
+      "announcedAt": "2026-08-22T06:45:00+07:00",
+      "title": "[TEST] Controlled Synapse IDX pipeline verification",
+      "subject": "Controlled pipeline verification",
+      "disclosureType": "TEST_MATERIAL_INFORMATION",
+      "attachments": [
+        {
+          "path": "files/controlled-disclosure.txt",
+          "filename": "controlled-disclosure.txt",
+          "contentType": "text/plain"
+        }
+      ]
+    }
+  ]
+}
