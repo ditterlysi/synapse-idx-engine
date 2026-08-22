@@ -96,9 +96,15 @@ class GeminiSummarizer(OpenRouterSummarizer):
         if not model:
             raise ValueError("GEMINI_MODEL must not be empty")
 
+        # SourceIngestionRunner still reads the legacy OpenRouter-named fields
+        # when it builds Synapse audit metadata. Keep those provenance fields in
+        # sync with the backend that is actually executing the request.
+        settings.openrouter_model = model
+        settings.openrouter_provider = "google-gemini"
+
         # The parent class expects OpenRouter-shaped settings. A copied settings
         # object lets us reuse the mature prompt/retry/audit machinery without
-        # mutating the caller's configuration or removing OpenRouter support.
+        # removing OpenRouter support.
         shim = settings.model_copy(
             update={
                 "openrouter_api_key": api_key,
