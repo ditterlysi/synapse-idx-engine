@@ -63,12 +63,8 @@ def build_gemini_request(openrouter_payload: dict[str, Any]) -> dict[str, Any]:
         ],
         "generationConfig": {
             "maxOutputTokens": max_tokens,
-            "responseFormat": {
-                "text": {
-                    "mimeType": "application/json",
-                    "schema": schema,
-                }
-            },
+            "responseMimeType": "application/json",
+            "responseJsonSchema": schema,
         },
     }
     if system_parts:
