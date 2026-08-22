@@ -4,6 +4,7 @@ from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
 import pytest
+from click import unstyle
 from typer.testing import CliRunner
 
 from idx_digest.config import Settings
@@ -80,11 +81,11 @@ def test_daily_runtime_uses_production_budgets_but_manual_keeps_e2e_caps() -> No
 def test_daily_command_requires_explicit_schedule_confirmation() -> None:
     result = runner.invoke(app, ["daily"])
     assert result.exit_code != 0
-    assert "--confirm-schedule is required" in result.output
+    assert "--confirm-schedule is required" in unstyle(result.output)
 
 
 def test_daily_command_refuses_when_kill_switch_is_off(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("SYNAPSE_DAILY_ENABLED", "false")
     result = runner.invoke(app, ["daily", "--confirm-schedule"])
     assert result.exit_code != 0
-    assert "SYNAPSE_DAILY_ENABLED=true is required" in result.output
+    assert "SYNAPSE_DAILY_ENABLED=true is required" in unstyle(result.output)
