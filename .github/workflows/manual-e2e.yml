@@ -2,9 +2,9 @@ name: Controlled Manual IDX E2E
 
 on:
   workflow_dispatch:
-  push:
+  pull_request:
     branches:
-      - e2e/manual-manifest-20260822
+      - main
     paths:
       - ".github/e2e-trigger"
 
