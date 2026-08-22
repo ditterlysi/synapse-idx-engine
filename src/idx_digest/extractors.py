@@ -6,8 +6,8 @@ import warnings
 from dataclasses import dataclass
 from pathlib import Path
 
-import fitz
 import openpyxl
+import pymupdf
 import pytesseract
 from bs4 import BeautifulSoup
 from docx import Document
@@ -31,7 +31,7 @@ def normalize_text(text: str) -> str:
 
 
 def extract_pdf(path: Path, settings: Settings, observer: RunObserver | None = None) -> ExtractionResult:
-    doc = fitz.open(path)
+    doc = pymupdf.open(path)
     parts: list[str] = []
     used_ocr = False
     task_id = observer.start_task(
@@ -56,7 +56,7 @@ def extract_pdf(path: Path, settings: Settings, observer: RunObserver | None = N
                         native_characters=len(native),
                         threshold=settings.ocr_min_chars_per_page,
                     )
-                pix = page.get_pixmap(matrix=fitz.Matrix(2.0, 2.0), alpha=False)
+                pix = page.get_pixmap(matrix=pymupdf.Matrix(2.0, 2.0), alpha=False)
                 image = Image.frombytes("RGB", (pix.width, pix.height), pix.samples)
                 ocr = pytesseract.image_to_string(image, lang=settings.ocr_lang).strip()
                 ocr_chars = len(ocr)
