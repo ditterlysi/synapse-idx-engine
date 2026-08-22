@@ -1,0 +1,145 @@
+from __future__ import annotations
+
+from datetime import datetime
+from pathlib import Path
+from zoneinfo import ZoneInfo
+
+from idx_digest.sources.idx_website import FileCheckpointStore, IdxWebsiteSource
+
+
+JAKARTA = ZoneInfo("Asia/Jakarta")
+
+
+class FakePoliteClient:
+    base_url = "https://www.idx.co.id"
+
+    def __init__(self, payload):
+        self.payload = payload
+        self.request_count = 0
+        self.downloaded_bytes = 0
+        self.download_calls: list[str] = []
+
+    def get_json(self, path, *, params):
+        assert path == "/primary/ListedCompany/GetAnnouncement"
+        assert params["emitenType"] == "*"
+        self.request_count += 1
+        return self.payload
+
+    def download(self, url: str, destination: Path) -> int:
+        self.request_count += 1
+        self.download_calls.append(url)
+        body = b"%PDF-1.4\ncontrolled fixture\n"
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.write_bytes(body)
+        self.downloaded_bytes += len(body)
+        return len(body)
+
+
+def _payload():
+    return {
+        "ResultCount": 1,
+        "Replies": [
+            {
+                "pengumuman": {
+                    "Id2": "20260822201500-TEST-BBRI_id-id",
+                    "NoPengumuman": "TEST/BBRI/VIII/2026",
+                    "TglPengumuman": "2026-08-22T20:15:00",
+                    "JudulPengumuman": "Controlled IDX website source fixture",
+                    "JenisPengumuman": "STOCK",
+                    "Kode_Emiten": "BBRI   ",
+                    "CreatedDate": "2026-08-22T20:16:00",
+                    "Form_Id": "10000",
+                    "PerihalPengumuman": "Controlled fixture",
+                },
+                "attachments": [
+                    {
+                        "PDFFilename": "fixture.pdf",
+                        "FullSavePath": "https://www.idx.co.id/StaticData/NewsAndAnnouncement/fixture.pdf",
+                        "OriginalFilename": "20260822_BBRI_fixture.pdf",
+                        "IsAttachment": True,
+                    }
+                ],
+            }
+        ],
+    }
+
+
+def test_source_stages_new_disclosure_and_commits_checkpoint_explicitly(tmp_path):
+    checkpoint_path = tmp_path / "checkpoint.json"
+    client = FakePoliteClient(_payload())
+    source = IdxWebsiteSource(
+        client,
+        checkpoint_store=FileCheckpointStore(checkpoint_path),
+        staging_dir=tmp_path / "cache",
+        page_size=50,
+        max_pages=2,
+    )
+
+    result = source.collect_window(
+        start_at=datetime(2026, 8, 22, 19, 0, tzinfo=JAKARTA),
+        end_at=datetime(2026, 8, 22, 21, 0, tzinfo=JAKARTA),
+    )
+
+    assert result.complete is False
+    assert len(result.disclosures) == 1
+    disclosure = result.disclosures[0]
+    assert disclosure.external_id == "idx-web-20260822201500-TEST-BBRI_id-id"
+    assert disclosure.ticker == "BBRI"
+    assert disclosure.title == "Controlled IDX website source fixture"
+    assert len(disclosure.attachments) == 1
+    assert disclosure.attachments[0].local_path is not None
+    assert disclosure.attachments[0].local_path.exists()
+    assert result.diagnostics["sourceRequests"] == 2
+    assert result.diagnostics["attachmentDownloads"] == 1
+    assert checkpoint_path.exists() is False
+
+    source.commit_checkpoint()
+    assert checkpoint_path.exists() is True
+
+
+def test_checkpoint_skips_already_seen_disclosure_and_avoids_redownload(tmp_path):
+    checkpoint_path = tmp_path / "checkpoint.json"
+    first_client = FakePoliteClient(_payload())
+    first_source = IdxWebsiteSource(
+        first_client,
+        checkpoint_store=FileCheckpointStore(checkpoint_path),
+        staging_dir=tmp_path / "cache",
+    )
+    first_source.collect_window(
+        start_at=datetime(2026, 8, 22, 19, 0, tzinfo=JAKARTA),
+        end_at=datetime(2026, 8, 22, 21, 0, tzinfo=JAKARTA),
+    )
+    first_source.commit_checkpoint()
+
+    second_client = FakePoliteClient(_payload())
+    second_source = IdxWebsiteSource(
+        second_client,
+        checkpoint_store=FileCheckpointStore(checkpoint_path),
+        staging_dir=tmp_path / "cache",
+    )
+    result = second_source.collect_window(
+        start_at=datetime(2026, 8, 22, 19, 0, tzinfo=JAKARTA),
+        end_at=datetime(2026, 8, 22, 21, 0, tzinfo=JAKARTA),
+    )
+
+    assert result.disclosures == ()
+    assert second_client.download_calls == []
+    assert result.diagnostics["sourceRequests"] == 1
+    assert result.diagnostics["disclosuresNew"] == 0
+
+
+def test_source_filters_records_outside_exact_requested_time(tmp_path):
+    client = FakePoliteClient(_payload())
+    source = IdxWebsiteSource(
+        client,
+        checkpoint_store=FileCheckpointStore(tmp_path / "checkpoint.json"),
+        staging_dir=tmp_path / "cache",
+    )
+
+    result = source.collect_window(
+        start_at=datetime(2026, 8, 22, 20, 30, tzinfo=JAKARTA),
+        end_at=datetime(2026, 8, 22, 21, 0, tzinfo=JAKARTA),
+    )
+
+    assert result.disclosures == ()
+    assert client.download_calls == []
