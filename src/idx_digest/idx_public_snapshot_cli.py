@@ -18,7 +18,10 @@ from .synapse_cli import (
 )
 from .timeutils import parse_boundary
 
+app = typer.Typer(add_completion=False, help="Import an offline snapshot captured from the official IDX disclosure page.")
 
+
+@app.command()
 def import_snapshot(
     manifest: Path = typer.Option(..., "--manifest", help="Path to an offline official-IDX snapshot manifest."),
     start: str = typer.Option(..., "--start", help="Explicit ISO timestamp, including timezone."),
@@ -86,7 +89,3 @@ def import_snapshot(
     typer.echo(json.dumps(report, ensure_ascii=False, indent=2))
     if not report["ok"]:
         raise typer.Exit(code=1)
-
-
-def main() -> None:
-    typer.run(import_snapshot)
