@@ -43,8 +43,9 @@ def test_build_gemini_request_uses_native_structured_output() -> None:
     assert request["contents"][0]["parts"][0]["text"] == "Summarize this disclosure."
     config = request["generationConfig"]
     assert config["maxOutputTokens"] == 1234
-    assert config["responseFormat"]["text"]["mimeType"] == "application/json"
-    assert config["responseFormat"]["text"]["schema"]["required"] == ["summary"]
+    assert config["responseMimeType"] == "application/json"
+    assert config["responseJsonSchema"]["required"] == ["summary"]
+    assert "responseFormat" not in config
     assert "temperature" not in config
     assert "provider" not in request
     assert "reasoning" not in request
@@ -85,7 +86,8 @@ def test_gemini_response_maps_back_to_existing_summarizer_contract() -> None:
 
     assert content == '{"summary":"ok"}'
     assert captured["path"].endswith("/models/gemini-3.5-flash-lite:generateContent")
-    assert captured["body"]["generationConfig"]["responseFormat"]["text"]["mimeType"] == "application/json"
+    assert captured["body"]["generationConfig"]["responseMimeType"] == "application/json"
+    assert captured["body"]["generationConfig"]["responseJsonSchema"]["required"] == ["summary"]
     assert usage["prompt_tokens"] == 10
     assert usage["completion_tokens"] == 4
     assert usage["total_tokens"] == 14
