@@ -20,9 +20,9 @@ jobs:
       SYNAPSE_INTERNAL_BASE_URL: ${{ secrets.SYNAPSE_INTERNAL_BASE_URL || secrets.SYNAPSE_INTERNAL_URL || vars.SYNAPSE_INTERNAL_BASE_URL || vars.SYNAPSE_INTERNAL_URL }}
       SYNAPSE_INGESTION_SECRET: ${{ secrets.SYNAPSE_INGESTION_SECRET || secrets.IDX_INGESTION_SECRET }}
       SOURCE_PAGE: https://bri.co.id/web/guest/announcement
-      APR_URL: https://bri.co.id/web/guest/api/files?path=%2Fsites%2Fdefault%2Ffiles%2Fdocuments%2FBRI+KI+PJBB+release+vf+%282%29.pdf
-      JUN_URL: https://bri.co.id/web/guest/api/files?path=%2Fsites%2Fdefault%2Ffiles%2Fdocuments%2FKeterbukaan+Informasi+atas+KI+Buyback+2026-1.pdf
-      JUL_URL: https://bri.co.id/web/guest/api/files?path=%2Fsites%2Fdefault%2Ffiles%2Fdocuments%2FKI+Afiliasi+Pembelian+Aset+Dapen_Final.pdf
+      APR_URL: https://bri.co.id/web/guest/api/files?path=%2Fsites%2Fdefault%2Ffiles%2Fdocuments%2FBRI%20KI%20PJBB%20release%20vf%20%282%29.pdf
+      JUN_URL: https://bri.co.id/web/guest/api/files?path=%2Fsites%2Fdefault%2Ffiles%2Fdocuments%2FKeterbukaan%20Informasi%20atas%20KI%20Buyback%202026-1.pdf
+      JUL_URL: https://bri.co.id/web/guest/api/files?path=%2Fsites%2Fdefault%2Ffiles%2Fdocuments%2FKI%20Afiliasi%20Pembelian%20Aset%20Dapen_Final.pdf
 
     steps:
       - name: Checkout
@@ -48,9 +48,17 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p real-batch/apr/files real-batch/jun/files real-batch/jul/files
-          curl --fail --location --silent --show-error --retry 2 "$APR_URL" -o real-batch/apr/files/bbri-bri-mi-affiliated-transaction.pdf
-          curl --fail --location --silent --show-error --retry 2 "$JUN_URL" -o real-batch/jun/files/bbri-buyback-2026.pdf
-          curl --fail --location --silent --show-error --retry 2 "$JUL_URL" -o real-batch/jul/files/bbri-affiliated-asset-purchase.pdf
+          fetch_pdf() {
+            curl --fail --location --silent --show-error --retry 2 --max-redirs 10 \
+              --user-agent 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/151 Safari/537.36' \
+              --header 'Accept-Language: id-ID,id;q=0.9,en;q=0.8' \
+              --header 'Cookie: GUEST_LANGUAGE_ID=id_ID' \
+              --referer "$SOURCE_PAGE" \
+              "$1" -o "$2"
+          }
+          fetch_pdf "$APR_URL" real-batch/apr/files/bbri-bri-mi-affiliated-transaction.pdf
+          fetch_pdf "$JUN_URL" real-batch/jun/files/bbri-buyback-2026.pdf
+          fetch_pdf "$JUL_URL" real-batch/jul/files/bbri-affiliated-asset-purchase.pdf
           python - <<'PY'
           from pathlib import Path
           for path in [
