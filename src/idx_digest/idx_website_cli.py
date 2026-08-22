@@ -31,6 +31,11 @@ app = typer.Typer(
 COLLECT_MAX_WINDOW = timedelta(hours=48)
 
 
+@app.callback()
+def main() -> None:
+    """Guarded IDX website collection commands."""
+
+
 @app.command()
 def collect(
     start: str = typer.Option(..., "--start", help="Explicit ISO timestamp, including timezone."),
