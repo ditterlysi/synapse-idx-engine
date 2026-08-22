@@ -111,6 +111,22 @@ def _display_filename(attachment: dict[str, Any]) -> str:
     return candidate or "idx-attachment.bin"
 
 
+def _raw_id(item: dict[str, Any]) -> str:
+    announcement = item.get("pengumuman")
+    if not isinstance(announcement, dict):
+        return ""
+    return str(announcement.get("Id2") or "").strip()
+
+
+def _dedupe_items(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    unique: dict[str, dict[str, Any]] = {}
+    for item in items:
+        item_id = _raw_id(item)
+        if item_id and item_id not in unique:
+            unique[item_id] = item
+    return list(unique.values())
+
+
 class IdxWebsiteSource:
     """HTTP-only incremental source for IDX public disclosures.
 
@@ -129,19 +145,181 @@ class IdxWebsiteSource:
         staging_dir: Path | str,
         page_size: int = 50,
         max_pages: int = 10,
+        wide_page_size: int = 200,
+        max_wide_page_size: int = 1000,
         timezone_name: str = "Asia/Jakarta",
     ) -> None:
         if page_size < 1 or page_size > 100:
             raise ValueError("page_size must be between 1 and 100")
         if max_pages < 1 or max_pages > 20:
             raise ValueError("max_pages must be between 1 and 20")
+        if wide_page_size < page_size:
+            raise ValueError("wide_page_size must be at least page_size")
+        if max_wide_page_size < wide_page_size:
+            raise ValueError("max_wide_page_size must be at least wide_page_size")
+        if max_wide_page_size > 2000:
+            raise ValueError("max_wide_page_size must not exceed 2000")
         self.client = client
         self.checkpoint_store = checkpoint_store
         self.staging_dir = Path(staging_dir).expanduser().resolve()
         self.page_size = page_size
         self.max_pages = max_pages
+        self.wide_page_size = wide_page_size
+        self.max_wide_page_size = max_wide_page_size
         self.timezone = ZoneInfo(timezone_name)
         self._pending_checkpoint: IdxWebsiteCheckpoint | None = None
+
+    def _metadata_params(
+        self,
+        *,
+        start_at: datetime,
+        end_at: datetime,
+        index_from: int,
+        page_size: int,
+    ) -> dict[str, Any]:
+        return {
+            "kodeEmiten": "",
+            "emitenType": "*",
+            "indexFrom": index_from,
+            "pageSize": page_size,
+            "dateFrom": start_at.astimezone(self.timezone).strftime("%Y%m%d"),
+            "dateTo": end_at.astimezone(self.timezone).strftime("%Y%m%d"),
+            "lang": "id",
+            "keyword": "",
+        }
+
+    def _fetch_metadata_page(
+        self,
+        *,
+        start_at: datetime,
+        end_at: datetime,
+        index_from: int,
+        page_size: int,
+    ) -> tuple[list[dict[str, Any]], int | None]:
+        payload = self.client.get_json(
+            IDX_ANNOUNCEMENT_ENDPOINT,
+            params=self._metadata_params(
+                start_at=start_at,
+                end_at=end_at,
+                index_from=index_from,
+                page_size=page_size,
+            ),
+        )
+        replies = payload.get("Replies")
+        if not isinstance(replies, list):
+            raise IdxWebsiteSourceError("IDX GetAnnouncement response does not contain Replies[]")
+        normalized = [item for item in replies if isinstance(item, dict)]
+        try:
+            reported_total = int(payload.get("ResultCount")) if payload.get("ResultCount") is not None else None
+        except (TypeError, ValueError):
+            reported_total = None
+        return normalized, reported_total
+
+    def _collect_metadata(
+        self,
+        *,
+        start_at: datetime,
+        end_at: datetime,
+    ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+        pages_fetched = 0
+        first_page, reported_total = self._fetch_metadata_page(
+            start_at=start_at,
+            end_at=end_at,
+            index_from=0,
+            page_size=self.page_size,
+        )
+        pages_fetched += 1
+        collected = _dedupe_items(first_page)
+
+        if reported_total is not None and reported_total <= len(collected):
+            return collected, {
+                "pagesFetched": pages_fetched,
+                "reportedTotal": reported_total,
+                "paginationStrategy": "single-page",
+                "metadataRowsCollected": len(collected),
+            }
+        if len(first_page) < self.page_size and (reported_total is None or reported_total <= len(collected)):
+            return collected, {
+                "pagesFetched": pages_fetched,
+                "reportedTotal": reported_total,
+                "paginationStrategy": "single-page",
+                "metadataRowsCollected": len(collected),
+            }
+
+        # IDX has been observed returning an empty/duplicated page for indexFrom>0
+        # while ResultCount still advertises additional rows. Prefer one bounded
+        # wide first-page request over many offset requests when the reported day
+        # fits inside the configured maximum.
+        if reported_total is not None and len(collected) < reported_total <= self.max_wide_page_size:
+            probe_size = min(self.max_wide_page_size, max(self.wide_page_size, reported_total))
+            probe_page, probe_total = self._fetch_metadata_page(
+                start_at=start_at,
+                end_at=end_at,
+                index_from=0,
+                page_size=probe_size,
+            )
+            pages_fetched += 1
+            probe_items = _dedupe_items(probe_page)
+            effective_total = probe_total if probe_total is not None else reported_total
+            if effective_total is not None and len(probe_items) < effective_total:
+                raise IdxWebsiteSourceError(
+                    "IDX metadata wide-page probe remained incomplete: "
+                    f"collected {len(probe_items)} of {effective_total} reported rows; collector stopped"
+                )
+            return probe_items, {
+                "pagesFetched": pages_fetched,
+                "reportedTotal": effective_total,
+                "paginationStrategy": "wide-page-probe",
+                "widePageProbeSize": probe_size,
+                "metadataRowsCollected": len(probe_items),
+            }
+
+        offset = len(first_page)
+        all_items = list(first_page)
+        complete = False
+        while pages_fetched < self.max_pages:
+            page, page_total = self._fetch_metadata_page(
+                start_at=start_at,
+                end_at=end_at,
+                index_from=offset,
+                page_size=self.page_size,
+            )
+            pages_fetched += 1
+            if reported_total is None and page_total is not None:
+                reported_total = page_total
+            if not page:
+                break
+            all_items.extend(page)
+            unique_items = _dedupe_items(all_items)
+            if reported_total is not None and len(unique_items) >= reported_total:
+                all_items = unique_items
+                complete = True
+                break
+            if len(page) < self.page_size:
+                all_items = unique_items
+                complete = reported_total is None or len(unique_items) >= reported_total
+                break
+            offset += len(page)
+
+        unique_items = _dedupe_items(all_items)
+        if reported_total is None:
+            complete = complete or (pages_fetched < self.max_pages)
+        elif len(unique_items) >= reported_total:
+            complete = True
+
+        if not complete:
+            expected = reported_total if reported_total is not None else "unknown"
+            raise IdxWebsiteSourceError(
+                "IDX metadata pagination is incomplete: "
+                f"collected {len(unique_items)} of {expected} reported rows; collector stopped without fan-out"
+            )
+
+        return unique_items, {
+            "pagesFetched": pages_fetched,
+            "reportedTotal": reported_total,
+            "paginationStrategy": "offset-pagination",
+            "metadataRowsCollected": len(unique_items),
+        }
 
     def _stage_attachment(self, raw: dict[str, Any]) -> tuple[SourceAttachment, bool]:
         url = _official_attachment_url(self.client.base_url, raw.get("FullSavePath"))
@@ -171,66 +349,24 @@ class IdxWebsiteSource:
 
         checkpoint = self.checkpoint_store.load()
         seen_checkpoint = set(checkpoint.seen_ids)
+        metadata_items, pagination = self._collect_metadata(start_at=start_at, end_at=end_at)
+
         ids_observed: list[str] = []
         candidates: list[tuple[str, dict[str, Any], datetime]] = []
-        ids_in_run: set[str] = set()
-        pages_fetched = 0
-        replies_seen = 0
-        reported_total: int | None = None
-
-        offset = 0
-        while pages_fetched < self.max_pages:
-            payload = self.client.get_json(
-                IDX_ANNOUNCEMENT_ENDPOINT,
-                params={
-                    "kodeEmiten": "",
-                    "emitenType": "*",
-                    "indexFrom": offset,
-                    "pageSize": self.page_size,
-                    "dateFrom": start_at.astimezone(self.timezone).strftime("%Y%m%d"),
-                    "dateTo": end_at.astimezone(self.timezone).strftime("%Y%m%d"),
-                    "lang": "id",
-                    "keyword": "",
-                },
-            )
-            pages_fetched += 1
-            replies = payload.get("Replies")
-            if not isinstance(replies, list):
-                raise IdxWebsiteSourceError("IDX GetAnnouncement response does not contain Replies[]")
-            try:
-                reported_total = int(payload.get("ResultCount") or len(replies))
-            except (TypeError, ValueError):
-                reported_total = None
-
-            replies_seen += len(replies)
-            for item in replies:
-                if not isinstance(item, dict):
-                    continue
-                announcement = item.get("pengumuman")
-                if not isinstance(announcement, dict):
-                    continue
-                raw_id = str(announcement.get("Id2") or "").strip()
-                if not raw_id or raw_id in ids_in_run:
-                    continue
-                ids_in_run.add(raw_id)
-                ids_observed.append(raw_id)
-                announced_at = _announcement_time(announcement.get("TglPengumuman"), self.timezone)
-                if not (start_at <= announced_at <= end_at):
-                    continue
-                if raw_id in seen_checkpoint:
-                    continue
-                candidates.append((raw_id, item, announced_at))
-
-            if len(replies) < self.page_size:
-                break
-            offset += len(replies)
-            if reported_total is not None and offset >= reported_total:
-                break
-        else:
-            if reported_total is None or replies_seen < reported_total:
-                raise IdxWebsiteSourceError(
-                    f"IDX website collection reached max_pages={self.max_pages} before exhausting the requested window"
-                )
+        for item in metadata_items:
+            announcement = item.get("pengumuman")
+            if not isinstance(announcement, dict):
+                continue
+            raw_id = str(announcement.get("Id2") or "").strip()
+            if not raw_id:
+                continue
+            ids_observed.append(raw_id)
+            announced_at = _announcement_time(announcement.get("TglPengumuman"), self.timezone)
+            if not (start_at <= announced_at <= end_at):
+                continue
+            if raw_id in seen_checkpoint:
+                continue
+            candidates.append((raw_id, item, announced_at))
 
         disclosures: list[SourceDisclosure] = []
         attachment_downloads = 0
@@ -290,9 +426,11 @@ class IdxWebsiteSource:
             "networkAccess": True,
             "transport": "http-only",
             "sourceRequests": self.client.request_count,
-            "pagesFetched": pages_fetched,
-            "repliesSeen": replies_seen,
-            "reportedTotal": reported_total,
+            "pagesFetched": pagination["pagesFetched"],
+            "repliesSeen": pagination["metadataRowsCollected"],
+            "reportedTotal": pagination["reportedTotal"],
+            "paginationStrategy": pagination["paginationStrategy"],
+            "metadataRowsCollected": pagination["metadataRowsCollected"],
             "checkpointSeenIds": len(seen_checkpoint),
             "disclosuresNew": len(disclosures),
             "attachmentDownloads": attachment_downloads,
@@ -300,6 +438,9 @@ class IdxWebsiteSource:
             "downloadedBytes": self.client.downloaded_bytes,
             "authoritativeCoverageAllowed": False,
         }
+        if "widePageProbeSize" in pagination:
+            diagnostics["widePageProbeSize"] = pagination["widePageProbeSize"]
+
         return SourceWindowResult(
             source_id=self.source_id,
             requested_start=start_at,
