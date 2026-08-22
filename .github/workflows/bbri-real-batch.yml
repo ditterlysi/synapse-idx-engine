@@ -20,9 +20,9 @@ jobs:
       SYNAPSE_INTERNAL_BASE_URL: ${{ secrets.SYNAPSE_INTERNAL_BASE_URL || secrets.SYNAPSE_INTERNAL_URL || vars.SYNAPSE_INTERNAL_BASE_URL || vars.SYNAPSE_INTERNAL_URL }}
       SYNAPSE_INGESTION_SECRET: ${{ secrets.SYNAPSE_INGESTION_SECRET || secrets.IDX_INGESTION_SECRET }}
       SOURCE_PAGE: https://bri.co.id/web/guest/announcement
-      APR_URL: https://bri.co.id/web/guest/api/files/?path=%2Fsites%2Fdefault%2Ffiles%2Fdocuments%2FBRI+KI+PJBB+release+vf+%282%29.pdf
-      JUN_URL: https://bri.co.id/web/guest/api/files/?path=%2Fsites%2Fdefault%2Ffiles%2Fdocuments%2FKeterbukaan+Informasi+atas+KI+Buyback+2026-1.pdf
-      JUL_URL: https://bri.co.id/web/guest/api/files/?path=%2Fsites%2Fdefault%2Ffiles%2Fdocuments%2FKI+Afiliasi+Pembelian+Aset+Dapen_Final.pdf
+      APR_URL: https://bri.co.id/web/guest/api/files?path=%2Fsites%2Fdefault%2Ffiles%2Fdocuments%2FBRI+KI+PJBB+release+vf+%282%29.pdf
+      JUN_URL: https://bri.co.id/web/guest/api/files?path=%2Fsites%2Fdefault%2Ffiles%2Fdocuments%2FKeterbukaan+Informasi+atas+KI+Buyback+2026-1.pdf
+      JUL_URL: https://bri.co.id/web/guest/api/files?path=%2Fsites%2Fdefault%2Ffiles%2Fdocuments%2FKI+Afiliasi+Pembelian+Aset+Dapen_Final.pdf
 
     steps:
       - name: Checkout
