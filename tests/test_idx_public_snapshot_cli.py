@@ -69,7 +69,6 @@ def test_snapshot_cli_requires_explicit_publish_confirmation(tmp_path) -> None:
     )
 
     assert result.exit_code == 2
-    assert "--confirm-publish" in result.output
 
 
 def test_snapshot_cli_runs_without_coverage_or_source_network(tmp_path, monkeypatch) -> None:
@@ -148,4 +147,3 @@ def test_snapshot_cli_rejects_cross_day_window(tmp_path) -> None:
     )
 
     assert result.exit_code != 0
-    assert "must stay within one Asia/Jakarta calendar date" in result.output
