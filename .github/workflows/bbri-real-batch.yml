@@ -1,0 +1,205 @@
+name: BBRI Real Disclosure Batch
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - '.github/workflows/bbri-real-batch.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  ingest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      AI_PROVIDER: gemini
+      GEMINI_MODEL: gemini-3.5-flash-lite
+      GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+      SYNAPSE_INTERNAL_BASE_URL: ${{ secrets.SYNAPSE_INTERNAL_BASE_URL || secrets.SYNAPSE_INTERNAL_URL || vars.SYNAPSE_INTERNAL_BASE_URL || vars.SYNAPSE_INTERNAL_URL }}
+      SYNAPSE_INGESTION_SECRET: ${{ secrets.SYNAPSE_INGESTION_SECRET || secrets.IDX_INGESTION_SECRET }}
+      SOURCE_PAGE: https://bri.co.id/web/guest/announcement
+      APR_URL: https://bri.co.id/web/guest/api/files/?path=%2Fsites%2Fdefault%2Ffiles%2Fdocuments%2FBRI+KI+PJBB+release+vf+%282%29.pdf
+      JUN_URL: https://bri.co.id/web/guest/api/files/?path=%2Fsites%2Fdefault%2Ffiles%2Fdocuments%2FKeterbukaan+Informasi+atas+KI+Buyback+2026-1.pdf
+      JUL_URL: https://bri.co.id/web/guest/api/files/?path=%2Fsites%2Fdefault%2Ffiles%2Fdocuments%2FKI+Afiliasi+Pembelian+Aset+Dapen_Final.pdf
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install engine
+        run: python -m pip install -e .
+
+      - name: Validate runtime secrets
+        shell: bash
+        run: |
+          test -n "$GEMINI_API_KEY" || { echo 'Missing GEMINI_API_KEY'; exit 1; }
+          test -n "$SYNAPSE_INTERNAL_BASE_URL" || { echo 'Missing SYNAPSE_INTERNAL_BASE_URL'; exit 1; }
+          test -n "$SYNAPSE_INGESTION_SECRET" || { echo 'Missing SYNAPSE_INGESTION_SECRET'; exit 1; }
+
+      - name: Download exact official BRI documents
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p real-batch/apr/files real-batch/jun/files real-batch/jul/files
+          curl --fail --location --silent --show-error --retry 2 "$APR_URL" -o real-batch/apr/files/bbri-bri-mi-affiliated-transaction.pdf
+          curl --fail --location --silent --show-error --retry 2 "$JUN_URL" -o real-batch/jun/files/bbri-buyback-2026.pdf
+          curl --fail --location --silent --show-error --retry 2 "$JUL_URL" -o real-batch/jul/files/bbri-affiliated-asset-purchase.pdf
+          python - <<'PY'
+          from pathlib import Path
+          for path in [
+              Path('real-batch/apr/files/bbri-bri-mi-affiliated-transaction.pdf'),
+              Path('real-batch/jun/files/bbri-buyback-2026.pdf'),
+              Path('real-batch/jul/files/bbri-affiliated-asset-purchase.pdf'),
+          ]:
+              data = path.read_bytes()
+              if len(data) < 20_000:
+                  raise SystemExit(f'{path} unexpectedly small: {len(data)} bytes')
+              if not data.startswith(b'%PDF-'):
+                  raise SystemExit(f'{path} is not a PDF')
+              print(f'{path}: {len(data)} bytes, PDF validated')
+          PY
+
+      - name: Build source manifests with verified timestamps
+        shell: python
+        run: |
+          import json
+          import os
+          from pathlib import Path
+
+          source_page = os.environ['SOURCE_PAGE']
+          rows = [
+              {
+                  'dir': 'apr',
+                  'start': '2026-04-02T13:30:00+07:00',
+                  'end': '2026-04-02T14:30:00+07:00',
+                  'externalId': 'manual-real-bbri-20260402-1400-bri-mi-affiliated-transaction',
+                  'announcedAt': '2026-04-02T14:00:00+07:00',
+                  'title': 'Transaksi Afiliasi - Rencana Penjualan 65% Saham BRI Manajemen Investasi kepada Danantara Asset Management',
+                  'subject': 'Perjanjian jual beli bersyarat atas 19.500.000 saham atau 65% kepemilikan BRI di BRI Manajemen Investasi',
+                  'type': 'AFFILIATED_TRANSACTION',
+                  'pdf': os.environ['APR_URL'],
+                  'filename': 'bbri-bri-mi-affiliated-transaction.pdf',
+              },
+              {
+                  'dir': 'jun',
+                  'start': '2026-06-12T10:30:00+07:00',
+                  'end': '2026-06-12T11:30:00+07:00',
+                  'externalId': 'manual-real-bbri-20260612-1100-buyback-2026',
+                  'announcedAt': '2026-06-12T11:00:00+07:00',
+                  'title': 'Keterbukaan Informasi Buyback 2026 kepada Pemegang Saham',
+                  'subject': 'Rencana pembelian kembali saham BBRI dengan nilai maksimum Rp500 miliar',
+                  'type': 'BUYBACK',
+                  'pdf': os.environ['JUN_URL'],
+                  'filename': 'bbri-buyback-2026.pdf',
+              },
+              {
+                  'dir': 'jul',
+                  'start': '2026-07-02T14:29:00+07:00',
+                  'end': '2026-07-02T15:29:00+07:00',
+                  'externalId': 'manual-real-bbri-20260702-1459-affiliated-asset-purchase',
+                  'announcedAt': '2026-07-02T14:59:00+07:00',
+                  'title': 'Transaksi Afiliasi - Pembelian Aset Tanah dan Bangunan dari Dana Pensiun BRI',
+                  'subject': 'Pembelian beberapa aset tanah dan bangunan dari Dana Pensiun BRI dengan total nilai transaksi Rp157,25 miliar',
+                  'type': 'AFFILIATED_TRANSACTION',
+                  'pdf': os.environ['JUL_URL'],
+                  'filename': 'bbri-affiliated-asset-purchase.pdf',
+              },
+          ]
+
+          for row in rows:
+              payload = {
+                  'schemaVersion': 'synapse-source-manifest-v1',
+                  'coverage': {
+                      'complete': False,
+                      'startAt': row['start'],
+                      'endAt': row['end'],
+                  },
+                  'disclosures': [{
+                      'externalId': row['externalId'],
+                      'ticker': 'BBRI',
+                      'announcedAt': row['announcedAt'],
+                      'title': row['title'],
+                      'subject': row['subject'],
+                      'disclosureType': row['type'],
+                      'sourceUrl': source_page,
+                      'metadata': {
+                          'sourceClass': 'official-issuer-announcement',
+                          'timestampPrecision': 'MINUTE_VERIFIED_ON_ISSUER_PAGE',
+                      },
+                      'attachments': [{
+                          'path': f"files/{row['filename']}",
+                          'filename': row['filename'],
+                          'contentType': 'application/pdf',
+                          'sourceUrl': row['pdf'],
+                      }],
+                  }],
+              }
+              path = Path('real-batch') / row['dir'] / 'manifest.json'
+              path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding='utf-8')
+              print(path)
+
+      - name: Import 02 Apr 2026 disclosure
+        shell: bash
+        run: |
+          set -euo pipefail
+          synapse-idx-engine manual-import \
+            --manifest real-batch/apr/manifest.json \
+            --start '2026-04-02T13:30:00+07:00' \
+            --end '2026-04-02T14:30:00+07:00' \
+            --confirm-publish > apr-report.json
+          cat apr-report.json
+
+      - name: Import 12 Jun 2026 disclosure
+        shell: bash
+        run: |
+          set -euo pipefail
+          synapse-idx-engine manual-import \
+            --manifest real-batch/jun/manifest.json \
+            --start '2026-06-12T10:30:00+07:00' \
+            --end '2026-06-12T11:30:00+07:00' \
+            --confirm-publish > jun-report.json
+          cat jun-report.json
+
+      - name: Import 02 Jul 2026 disclosure
+        shell: bash
+        run: |
+          set -euo pipefail
+          synapse-idx-engine manual-import \
+            --manifest real-batch/jul/manifest.json \
+            --start '2026-07-02T14:29:00+07:00' \
+            --end '2026-07-02T15:29:00+07:00' \
+            --confirm-publish > jul-report.json
+          cat jul-report.json
+
+      - name: Verify bounded permanent batch semantics
+        shell: python
+        run: |
+          import json
+
+          for label, path in [
+              ('2026-04-02', 'apr-report.json'),
+              ('2026-06-12', 'jun-report.json'),
+              ('2026-07-02', 'jul-report.json'),
+          ]:
+              report = json.loads(open(path, encoding='utf-8').read())
+              assert report['ok'] is True, report
+              assert report['processingOk'] is True, report
+              assert report['status'] == 'PARTIAL', report
+              assert report['coverageCommitted'] is False, report
+              assert report['coverageAuthoritative'] is False, report
+              assert report['scheduleEnabled'] is False, report
+              assert report['publish']['disclosuresAvailable'] == 1, report
+              assert report['publish']['disclosuresCreated'] == 1, report
+              assert report['publish']['filesExtracted'] == 1, report
+              assert report['publish']['documentsAnalyzed'] == 1, report
+              assert report['publish']['analysesCompleted'] == 1, report
+              assert report['publish']['errors'] == [], report
+              assert report['budget']['source_requests'] == 0, report
+              print(label, report['runId'], 'OK')
