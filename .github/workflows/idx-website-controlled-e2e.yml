@@ -9,6 +9,7 @@ on:
 permissions:
   contents: read
 
+# One-shot rollout gate for the Phase A collector. Remove after verification.
 jobs:
   verify:
     if: github.head_ref == 'feat/automated-idx-collector-mvp'
