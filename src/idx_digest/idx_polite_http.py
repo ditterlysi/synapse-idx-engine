@@ -2,8 +2,9 @@ from __future__ import annotations
 
 import random
 import time
+from collections.abc import Callable
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 from urllib.parse import urlparse
 
 import httpx
