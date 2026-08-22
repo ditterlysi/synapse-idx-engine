@@ -1,0 +1,17 @@
+SYNAPSE IDX DISCLOSURE INTELLIGENCE — CONTROLLED E2E TEST
+
+This document is synthetic test data created only to verify the Synapse IDX disclosure ingestion pipeline. It is NOT an actual disclosure from PT Bank Rakyat Indonesia (Persero) Tbk, the Indonesia Stock Exchange, or any other issuer.
+
+Ticker: BBRI
+Test announcement time: 22 August 2026, 06:45 WIB
+Subject: Controlled pipeline verification
+
+For test purposes only, assume the issuer states that it is evaluating a non-binding digital infrastructure investment program with an indicative value of IDR 1,000,000,000. No final investment decision has been made. The evaluation is expected to be reviewed again on 30 September 2026. The principal test risk is that the proposal may be changed, delayed, or cancelled.
+
+Expected extraction concepts for E2E verification:
+- indicative amount: IDR 1,000,000,000
+- review date: 30 September 2026
+- status: evaluation only / not final
+- risk: change, delay, or cancellation
+
+TEST DATA ONLY — DELETE AFTER E2E VERIFICATION.
