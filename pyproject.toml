@@ -33,7 +33,7 @@ dev = ["pytest>=8,<9", "ruff>=0.6,<1"]
 [project.scripts]
 idx-digest = "idx_digest.cli:app"
 synapse-idx-engine = "idx_digest.synapse_cli:app"
-synapse-idx-public-snapshot = "idx_digest.idx_public_snapshot_cli:main"
+synapse-idx-public-snapshot = "idx_digest.idx_public_snapshot_cli:app"
 
 [tool.setuptools.packages.find]
 where = ["src"]
