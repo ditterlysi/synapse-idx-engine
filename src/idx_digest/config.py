@@ -9,9 +9,9 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 
-    # AI backend selection for source-neutral Synapse ingestion. Keep OpenRouter
-    # as the compatibility default; direct Gemini can be selected explicitly.
-    ai_provider: str = "openrouter"
+    # AI backend selection for source-neutral Synapse ingestion. Direct Gemini
+    # is the Synapse default; OpenRouter remains an explicit compatibility option.
+    ai_provider: str = "gemini"
 
     # Direct Gemini Developer API.
     gemini_api_key: str = ""
