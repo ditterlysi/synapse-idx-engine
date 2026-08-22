@@ -7,7 +7,7 @@ import typer
 
 from .ai_provider import resolve_ai_provider
 from .config import Settings
-from .source_ingestion import SourceIngestionRunner
+from .snapshot_ingestion import SnapshotSourceIngestionRunner
 from .sources.idx_public_snapshot import IDX_PUBLIC_EXTERNAL_ID_PREFIX, IdxPublicSnapshotSource
 from .synapse_cli import (
     E2E_MAX_WINDOW,
@@ -59,7 +59,7 @@ def import_snapshot(
     provider_runtime = resolve_ai_provider(_tighten_e2e_settings(settings))
     source = IdxPublicSnapshotSource(manifest)
     try:
-        result = SourceIngestionRunner(
+        result = SnapshotSourceIngestionRunner(
             provider_runtime.settings,
             source,
             summarizer_factory=provider_runtime.summarizer_factory,
