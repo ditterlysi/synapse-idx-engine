@@ -5,6 +5,8 @@ from datetime import datetime, timezone
 from typing import Any
 from urllib.parse import quote
 
+import httpx
+
 from .config import Settings
 from .sources.idx_website import CHECKPOINT_SCHEMA, IdxWebsiteCheckpoint
 from .synapse_client import SynapseClient
@@ -49,8 +51,9 @@ class SourceStateSynapseClient(SynapseClient):
         *,
         source_id: str,
         source_request_counter: Callable[[], int] | None = None,
+        transport: httpx.BaseTransport | None = None,
     ) -> None:
-        super().__init__(settings)
+        super().__init__(settings, transport=transport)
         self.source_id = source_id
         self.source_request_counter = source_request_counter
 
