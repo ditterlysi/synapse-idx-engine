@@ -11,7 +11,8 @@ def test_daily_workflow_keeps_production_guardrails() -> None:
     assert "SYNAPSE_DAILY_TRANSPORT: http" in workflow
     assert "SYNAPSE_DAILY_ALLOW_HISTORICAL_BACKFILL: \"false\"" in workflow
     assert "SYNAPSE_DAILY_ALLOW_TICKER_FANOUT: \"false\"" in workflow
-    assert "synapse-idx-website daily --confirm-schedule" in workflow
+    assert "set -o pipefail" in workflow
+    assert "synapse-idx-website daily --confirm-schedule | tee idx-daily-report.json" in workflow
     assert "cancel-in-progress: false" in workflow
     assert "issues: write" in workflow
     assert "gh issue create" in workflow
