@@ -7,7 +7,7 @@ import typer
 
 from .ai_provider import resolve_ai_provider
 from .config import Settings
-from .source_ingestion import SourceIngestionRunner
+from .snapshot_ingestion import SnapshotSourceIngestionRunner
 from .sources.idx_public_snapshot import IDX_PUBLIC_EXTERNAL_ID_PREFIX, IdxPublicSnapshotSource
 from .synapse_cli import (
     E2E_MAX_WINDOW,
@@ -17,6 +17,10 @@ from .synapse_cli import (
     _validate_explicit_timestamp,
 )
 from .timeutils import parse_boundary
+
+# Preserve the existing test/injection seam while routing snapshot CLIs through
+# the provenance-aware runner.
+SourceIngestionRunner = SnapshotSourceIngestionRunner
 
 app = typer.Typer(add_completion=False, help="Import an offline snapshot captured from the official IDX disclosure page.")
 
