@@ -1,0 +1,95 @@
+name: IDX Daily Collector
+
+on:
+  schedule:
+    # 20:00 UTC = 03:00 Asia/Jakarta (next calendar day).
+    - cron: "0 20 * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: idx-daily-collector-production
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  collect:
+    if: ${{ vars.IDX_DAILY_ENABLED == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 50
+    env:
+      AI_PROVIDER: gemini
+      GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+      SYNAPSE_INTERNAL_BASE_URL: ${{ secrets.SYNAPSE_INTERNAL_BASE_URL }}
+      SYNAPSE_INGESTION_SECRET: ${{ secrets.SYNAPSE_INGESTION_SECRET }}
+      SYNAPSE_DAILY_ENABLED: "true"
+      IDX_USER_AGENT: ${{ vars.IDX_USER_AGENT }}
+      APP_TIMEZONE: Asia/Jakarta
+      SYNAPSE_DAILY_TRANSPORT: http
+      SYNAPSE_DAILY_ALLOW_HISTORICAL_BACKFILL: "false"
+      SYNAPSE_DAILY_ALLOW_TICKER_FANOUT: "false"
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install engine
+        run: python -m pip install -e .
+
+      - name: Run daily collector
+        run: synapse-idx-website daily --confirm-schedule | tee idx-daily-report.json
+
+      - name: Write run summary
+        if: always()
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          report_path = Path("idx-daily-report.json")
+          summary_path = Path(os.environ["GITHUB_STEP_SUMMARY"])
+          lines = ["## IDX Daily Collector", ""]
+          if not report_path.exists() or not report_path.read_text(encoding="utf-8").strip():
+              lines.append("No collector JSON report was produced.")
+          else:
+              try:
+                  report = json.loads(report_path.read_text(encoding="utf-8"))
+              except json.JSONDecodeError as exc:
+                  lines.append(f"Collector report was not valid JSON: `{exc}`")
+              else:
+                  for key in (
+                      "ok",
+                      "status",
+                      "runId",
+                      "announcementsFound",
+                      "announcementsNew",
+                      "filesDownloaded",
+                      "filesExtracted",
+                      "analysesCompleted",
+                      "sourceRequests",
+                      "checkpointCommitted",
+                      "scheduleEnabled",
+                  ):
+                      if key in report:
+                          lines.append(f"- **{key}**: `{report[key]}`")
+          summary_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+          PY
+
+      - name: Create failure alert issue
+        if: failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh issue create \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "[IDX Daily] Collector failure #${GITHUB_RUN_NUMBER}" \
+            --body "The scheduled IDX collector failed.\n\nRun: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}\nCommit: ${GITHUB_SHA}\n\nThe durable checkpoint is not advanced on failed processing, so the next successful run can retry the bounded window."
