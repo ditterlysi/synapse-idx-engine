@@ -29,7 +29,7 @@ class Settings(BaseSettings):
     openrouter_http_referer: str = ""
     openrouter_app_title: str = "Synapse IDX Engine"
 
-    idx_base_url: str = "https://www.idx.co.id"
+    idx_base_url: str = "https://www.idx.id"
     idx_page_size: int = Field(default=50, ge=1, le=200)
     idx_request_delay_seconds: float = Field(default=0.35, ge=0)
     idx_user_agent: str = "SynapseIDXEngine/0.16.0"
