@@ -9,9 +9,9 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 
-    # AI backend selection for source-neutral Synapse ingestion. Keep OpenRouter
-    # as the compatibility default; direct Gemini can be selected explicitly.
-    ai_provider: str = "openrouter"
+    # AI backend selection for source-neutral Synapse ingestion. Direct Gemini
+    # is the Synapse default; OpenRouter remains an explicit compatibility option.
+    ai_provider: str = "gemini"
 
     # Direct Gemini Developer API.
     gemini_api_key: str = ""
@@ -29,7 +29,7 @@ class Settings(BaseSettings):
     openrouter_http_referer: str = ""
     openrouter_app_title: str = "Synapse IDX Engine"
 
-    idx_base_url: str = "https://www.idx.co.id"
+    idx_base_url: str = "https://www.idx.id"
     idx_page_size: int = Field(default=50, ge=1, le=200)
     idx_request_delay_seconds: float = Field(default=0.35, ge=0)
     idx_user_agent: str = "SynapseIDXEngine/0.16.0"

@@ -16,7 +16,8 @@ def _manual_env(tmp_path) -> dict[str, str]:
         "SYNAPSE_DAILY_ENABLED": "false",
         "SYNAPSE_INTERNAL_BASE_URL": "https://synapse.example",
         "SYNAPSE_INGESTION_SECRET": "test-secret",
-        "OPENROUTER_API_KEY": "test-openrouter-key",
+        "AI_PROVIDER": "gemini",
+        "GEMINI_API_KEY": "test-gemini-key",
         "SYNAPSE_DAILY_REQUEST_DELAY_SECONDS": "0.5",
         "SYNAPSE_DAILY_REQUEST_JITTER_SECONDS": "0",
     }
