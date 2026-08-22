@@ -159,8 +159,21 @@ class SourceIngestionRunner:
             _http_url(attachment.source_url)
 
     @staticmethod
+    def _disclosure_attachment_hashes(disclosure: SourceDisclosure) -> list[str]:
+        hashes: list[str] = []
+        for attachment in disclosure.attachments:
+            digest = attachment.sha256
+            path = attachment.local_path
+            if digest is None and path is not None and path.exists() and path.is_file():
+                digest = _file_sha256(path)
+            if digest:
+                hashes.append(digest.lower())
+        return list(dict.fromkeys(hashes))
+
+    @staticmethod
     def _disclosure_item(source_id: str, disclosure: SourceDisclosure) -> DisclosureUpsertItem:
         source_url = _http_url(disclosure.source_url)
+        attachment_hashes = SourceIngestionRunner._disclosure_attachment_hashes(disclosure)
         return DisclosureUpsertItem(
             idx_announcement_id=disclosure.external_id,
             ticker=disclosure.ticker,
@@ -173,6 +186,7 @@ class SourceIngestionRunner:
                 "sourceId": source_id,
                 "sourceExternalId": disclosure.external_id,
                 "sourceAttachmentCount": len(disclosure.attachments),
+                "sourceAttachmentSha256s": attachment_hashes,
             },
         )
 
