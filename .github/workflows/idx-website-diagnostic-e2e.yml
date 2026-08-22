@@ -1,4 +1,4 @@
-name: IDX Website Diagnostic E2E
+name: IDX Website Controlled E2E
 
 on:
   pull_request:
@@ -10,7 +10,7 @@ permissions:
   contents: read
 
 jobs:
-  diagnose:
+  verify:
     if: github.head_ref == 'feat/automated-idx-collector-mvp'
     runs-on: ubuntu-latest
     timeout-minutes: 20
@@ -53,12 +53,10 @@ jobs:
       - name: Check Synapse boundary
         run: synapse-idx-engine api-check -t BACA
 
-      - name: Collect one real BACA disclosure and preserve report
-        id: collect
-        continue-on-error: true
+      - name: Collect one real BACA disclosure with Gemini
         shell: bash
         run: |
-          set -o pipefail
+          set -euo pipefail
           mkdir -p data
           synapse-idx-website collect \
             --start '2026-08-21T22:10:00+07:00' \
@@ -68,16 +66,70 @@ jobs:
             --confirm-publish \
             | tee first-report.json
 
-      - name: Print collector report
-        if: always()
+      - name: Verify first live collection
+        shell: python
+        run: |
+          import json
+
+          report = json.loads(open('first-report.json', encoding='utf-8').read())
+          diagnostics = report['sourceDiagnostics']
+          publish = report['publish']
+
+          assert report['ok'] is True, report
+          assert report['processingOk'] is True, report
+          assert report['status'] == 'PARTIAL', report
+          assert report['sourceId'] == 'idx-website', report
+          assert report['sourceComplete'] is False, report
+          assert report['coverageCommitted'] is False, report
+          assert report['coverageAuthoritative'] is False, report
+          assert report['checkpointCommitted'] is True, report
+          assert report['scheduleEnabled'] is False, report
+          assert report['sourceTransport'] == 'http-only', report
+          assert diagnostics['disclosuresNew'] == 1, diagnostics
+          assert diagnostics['attachmentDownloads'] == 1, diagnostics
+          assert diagnostics['sourceRequests'] <= 4, diagnostics
+          assert publish['disclosuresAvailable'] == 1, publish
+          assert publish['attachmentsStaged'] == 1, publish
+          assert publish['filesExtracted'] == 1, publish
+          assert publish['documentsAnalyzed'] == 1, publish
+          assert publish['analysesCompleted'] == 1, publish
+          assert publish['partialDisclosures'] == 0, publish
+          assert publish['errors'] == [], publish
+
+      - name: Repeat same window using committed checkpoint
         shell: bash
         run: |
-          if test -f first-report.json; then
-            cat first-report.json
-          else
-            echo 'first-report.json was not created'
-          fi
+          set -euo pipefail
+          synapse-idx-website collect \
+            --start '2026-08-21T22:10:00+07:00' \
+            --end '2026-08-21T22:11:30+07:00' \
+            --checkpoint './data/idx-website-e2e-checkpoint.json' \
+            --enable-source \
+            --confirm-publish \
+            | tee repeat-report.json
 
-      - name: Fail diagnostic gate when collector failed
-        if: steps.collect.outcome == 'failure'
-        run: exit 1
+      - name: Verify repeat is incremental
+        shell: python
+        run: |
+          import json
+
+          report = json.loads(open('repeat-report.json', encoding='utf-8').read())
+          diagnostics = report['sourceDiagnostics']
+          publish = report['publish']
+
+          assert report['ok'] is True, report
+          assert report['processingOk'] is True, report
+          assert report['status'] == 'PARTIAL', report
+          assert report['coverageCommitted'] is False, report
+          assert report['checkpointCommitted'] is True, report
+          assert report['scheduleEnabled'] is False, report
+          assert diagnostics['disclosuresNew'] == 0, diagnostics
+          assert diagnostics['attachmentDownloads'] == 0, diagnostics
+          assert diagnostics['sourceRequests'] <= 2, diagnostics
+          assert publish['disclosuresAvailable'] == 0, publish
+          assert publish['disclosuresCreated'] == 0, publish
+          assert publish['attachmentsStaged'] == 0, publish
+          assert publish['filesExtracted'] == 0, publish
+          assert publish['documentsAnalyzed'] == 0, publish
+          assert publish['analysesCompleted'] == 0, publish
+          assert publish['errors'] == [], publish
