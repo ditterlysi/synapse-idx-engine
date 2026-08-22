@@ -108,6 +108,34 @@ A local snapshot bundle for that row can look like:
 
 The file under `files/` must already have been saved locally. Normal `ManualManifestSource` protections still apply: absolute paths and path traversal are rejected, file existence is checked, and optional SHA-256 values are verified.
 
+## Import command
+
+After installing the engine, the explicit public-snapshot command is available as:
+
+```bash
+synapse-idx-public-snapshot \
+  --manifest ./idx-snapshot/manifest.json \
+  --start '2026-07-10T22:00:00+07:00' \
+  --end '2026-07-10T23:59:59+07:00' \
+  --confirm-publish
+```
+
+The command uses the configured AI backend (`AI_PROVIDER=gemini` or `AI_PROVIDER=openrouter`) and the existing authenticated Synapse Internal API boundary.
+
+It applies the same bounded import guardrails as `manual-import`:
+
+```text
+explicit timezone-aware timestamps
+maximum two-hour window
+one Asia/Jakarta calendar date only
+explicit --confirm-publish
+coverage commit disabled
+scheduled execution disabled
+source network access disabled
+```
+
+A successful import is expected to remain `PARTIAL` from a coverage perspective while `processingOk=true` if extraction and AI analysis succeed.
+
 ## Why this is non-authoritative
 
 A page snapshot can show real official IDX disclosure rows but it does not prove that every disclosure in a requested time interval was captured. Pagination, page state, timing, and snapshot boundaries can all make the set incomplete.
