@@ -1,0 +1,131 @@
+name: IDX Reliability Controlled E2E
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - '.github/workflows/idx-reliability-e2e.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  seed-durable-state:
+    if: github.head_ref == 'feat/idx-collector-reliability'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      AI_PROVIDER: gemini
+      GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+      GEMINI_MODEL: gemini-3.5-flash-lite
+      SYNAPSE_INTERNAL_BASE_URL: ${{ secrets.SYNAPSE_INTERNAL_BASE_URL || secrets.SYNAPSE_INTERNAL_URL || vars.SYNAPSE_INTERNAL_BASE_URL || vars.SYNAPSE_INTERNAL_URL }}
+      SYNAPSE_INGESTION_SECRET: ${{ secrets.SYNAPSE_INGESTION_SECRET || secrets.IDX_INGESTION_SECRET }}
+      IDX_BASE_URL: https://www.idx.id
+      IDX_PAGE_SIZE: '100'
+      SYNAPSE_DAILY_REQUEST_DELAY_SECONDS: '10'
+      SYNAPSE_DAILY_REQUEST_JITTER_SECONDS: '2'
+      SYNAPSE_DAILY_MAX_SOURCE_REQUESTS: '10'
+      SYNAPSE_DAILY_MAX_ATTACHMENTS: '5'
+      SYNAPSE_DAILY_MAX_DOWNLOAD_BYTES: '50000000'
+      SYNAPSE_DAILY_MAX_AI_DOCUMENTS: '5'
+      SYNAPSE_DAILY_MAX_RUN_SECONDS: '900'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+      - run: python -m pip install -e .
+      - name: Wait for Synapse source-state API
+        shell: bash
+        run: |
+          for attempt in 1 2 3 4 5 6; do
+            if synapse-idx-website health > health-before.json; then
+              cat health-before.json
+              exit 0
+            fi
+            sleep 10
+          done
+          cat health-before.json || true
+          exit 1
+      - name: Seed durable checkpoint from one bounded BACA window
+        run: |
+          synapse-idx-website collect \
+            --start '2026-08-21T22:10:00+07:00' \
+            --end '2026-08-21T22:11:30+07:00' \
+            --enable-source \
+            --confirm-publish \
+            | tee first-report.json
+      - name: Verify durable commit
+        shell: python
+        run: |
+          import json
+          report = json.load(open('first-report.json', encoding='utf-8'))
+          d = report['sourceDiagnostics']
+          p = report['publish']
+          assert report['ok'] is True, report
+          assert report['processingOk'] is True, report
+          assert report['checkpointBackend'] == 'synapse', report
+          assert report['checkpointCommitted'] is True, report
+          assert report['scheduleEnabled'] is False, report
+          assert report['coverageCommitted'] is False, report
+          assert d['disclosuresNew'] in (0, 1), d
+          if d['disclosuresNew'] == 0:
+              assert d['attachmentDownloads'] == 0, d
+              assert p['documentsAnalyzed'] == 0, p
+
+  fresh-runner-repeat:
+    needs: seed-durable-state
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      AI_PROVIDER: gemini
+      GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+      GEMINI_MODEL: gemini-3.5-flash-lite
+      SYNAPSE_INTERNAL_BASE_URL: ${{ secrets.SYNAPSE_INTERNAL_BASE_URL || secrets.SYNAPSE_INTERNAL_URL || vars.SYNAPSE_INTERNAL_BASE_URL || vars.SYNAPSE_INTERNAL_URL }}
+      SYNAPSE_INGESTION_SECRET: ${{ secrets.SYNAPSE_INGESTION_SECRET || secrets.IDX_INGESTION_SECRET }}
+      IDX_BASE_URL: https://www.idx.id
+      IDX_PAGE_SIZE: '100'
+      SYNAPSE_DAILY_REQUEST_DELAY_SECONDS: '10'
+      SYNAPSE_DAILY_REQUEST_JITTER_SECONDS: '2'
+      SYNAPSE_DAILY_MAX_SOURCE_REQUESTS: '10'
+      SYNAPSE_DAILY_MAX_ATTACHMENTS: '5'
+      SYNAPSE_DAILY_MAX_DOWNLOAD_BYTES: '50000000'
+      SYNAPSE_DAILY_MAX_AI_DOCUMENTS: '5'
+      SYNAPSE_DAILY_MAX_RUN_SECONDS: '900'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+      - run: python -m pip install -e .
+      - name: Repeat same window from empty filesystem
+        run: |
+          test ! -e ./data/idx-website-checkpoint.json
+          synapse-idx-website collect \
+            --start '2026-08-21T22:10:00+07:00' \
+            --end '2026-08-21T22:11:30+07:00' \
+            --enable-source \
+            --confirm-publish \
+            | tee repeat-report.json
+      - name: Verify checkpoint survived runner boundary
+        shell: python
+        run: |
+          import json
+          report = json.load(open('repeat-report.json', encoding='utf-8'))
+          d = report['sourceDiagnostics']
+          p = report['publish']
+          assert report['ok'] is True, report
+          assert report['processingOk'] is True, report
+          assert report['checkpointBackend'] == 'synapse', report
+          assert report['checkpointCommitted'] is True, report
+          assert d['disclosuresNew'] == 0, d
+          assert d['attachmentDownloads'] == 0, d
+          assert p['attachmentsStaged'] == 0, p
+          assert p['filesExtracted'] == 0, p
+          assert p['documentsAnalyzed'] == 0, p
+          assert p['analysesCompleted'] == 0, p
+          assert p['errors'] == [], p
+      - name: Verify health is readable without IDX or AI
+        run: synapse-idx-website health | tee health-after.json
