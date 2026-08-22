@@ -28,6 +28,7 @@ jobs:
       OPENROUTER_MODEL: google/gemma-4-31b-it:free
       OPENROUTER_PROVIDER: google-ai-studio
       OPENROUTER_ALLOW_FALLBACKS: "false"
+      OPENROUTER_REQUIRE_PARAMETERS: "false"
       SYNAPSE_DAILY_ENABLED: "false"
       APP_TIMEZONE: Asia/Jakarta
 
