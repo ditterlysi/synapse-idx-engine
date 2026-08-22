@@ -9,7 +9,6 @@ from urllib.parse import urlparse
 
 import httpx
 
-
 OFFICIAL_IDX_HOSTS = {"idx.co.id", "www.idx.co.id", "idx.id", "www.idx.id"}
 _WAF_MARKERS = ("cloudflare", "turnstile", "captcha", "challenge-platform", "cf-chl-")
 
