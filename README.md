@@ -1,8 +1,8 @@
 # IDX Disclosure Digest
 
-IDX Disclosure Digest collects IDX disclosure metadata and attachments, extracts their text, and builds isolated per-issuer research summaries through OpenRouter. It includes a CLI, a local browser-based workspace, durable SQLite checkpoints, recovery tools, and shareable exports.
+IDX Disclosure Digest collects IDX disclosure metadata and attachments, extracts their text, and builds isolated per-issuer research summaries. It includes a CLI, a local browser-based workspace, durable SQLite checkpoints, recovery tools, and shareable exports.
 
-The repository also contains the source-neutral Synapse ingestion path. That path is intentionally separated from automated IDX website collection and can use either direct Gemini or the existing OpenRouter backend for analysis.
+The repository also contains the source-neutral Synapse ingestion path and a separate guarded HTTP-only IDX website collector. Synapse ingestion can use direct Gemini or the existing OpenRouter backend for analysis; the scheduled collector defaults to direct Gemini.
 
 ## What it does
 
@@ -14,7 +14,8 @@ The repository also contains the source-neutral Synapse ingestion path. That pat
 - Deduplicates announcements, attachments, and already-completed model work.
 - Produces document, announcement, and company-window summaries without mixing issuers.
 - Saves files, summaries, prompts, audits, progress, and recovery state locally.
-- Provides a source-neutral `DisclosureSource` ingestion boundary for Synapse without requiring automated IDX website collection.
+- Provides a source-neutral `DisclosureSource` ingestion boundary for Synapse.
+- Provides a guarded HTTP-only `idx-website` source with durable Synapse-backed checkpoints and non-authoritative coverage semantics.
 
 ## Quick start
 
@@ -28,7 +29,7 @@ python verify_install.py
 idx-digest gui
 ```
 
-Add `OPENROUTER_API_KEY` to `.env` before using the legacy model-backed research summaries. OCR also requires Tesseract and the Indonesian language pack.
+Add `OPENROUTER_API_KEY` to `.env` before using the legacy OpenRouter-backed research summaries. OCR also requires Tesseract and the Indonesian language pack.
 
 See [INSTALLATION.md](INSTALLATION.md) for the complete macOS, Linux, Docker, upgrade, and troubleshooting instructions.
 
@@ -63,11 +64,37 @@ OPENROUTER_MODEL=deepseek/deepseek-v4-flash-0731
 OPENROUTER_PROVIDER=deepinfra
 ```
 
-Only the selected provider's API key is required for this source-neutral path. The direct Gemini adapter uses GenerateContent structured output and keeps the existing local schema validation.
-
-Automated IDX website collection remains disabled for Synapse pending an approved/licensed source integration. Scheduled daily execution also remains disabled.
+Only the selected provider's API key is required for this path. The direct Gemini adapter uses GenerateContent structured output and keeps the existing local schema validation.
 
 See [docs/MANUAL_IMPORT.md](docs/MANUAL_IMPORT.md) and [docs/SOURCE_ADAPTERS.md](docs/SOURCE_ADAPTERS.md).
+
+## Guarded IDX website collector
+
+The production-tested website adapter uses the public `ListedCompany/GetAnnouncement` path and official IDX attachment hosts through an HTTP-only client. It fails closed on access protection, does not use browser/proxy/CAPTCHA bypasses, never claims authoritative coverage, and commits its durable checkpoint only after successful processing.
+
+Manual bounded run:
+
+```bash
+synapse-idx-website collect \
+  --start '2026-08-22T18:00:00+07:00' \
+  --end '2026-08-22T20:00:00+07:00' \
+  --enable-source \
+  --confirm-publish
+```
+
+Read-only health check, with no IDX or AI request:
+
+```bash
+synapse-idx-website health
+```
+
+Scheduled iteration:
+
+```bash
+SYNAPSE_DAILY_ENABLED=true synapse-idx-website daily --confirm-schedule
+```
+
+`.github/workflows/daily.yml` is scheduled for `20:00 UTC` / `03:00 Asia/Jakarta`, but its production job is skipped unless the repository variable `IDX_DAILY_ENABLED` is exactly `true`. Failed jobs create a GitHub Issue with the Actions run link. See [docs/IDX_WEBSITE_COLLECTOR.md](docs/IDX_WEBSITE_COLLECTOR.md) for rollout and recovery details.
 
 ## Common commands
 
@@ -154,7 +181,7 @@ The local GUI binds to `127.0.0.1` by default and has no authentication. Do not 
 
 IDX transport defaults to `auto` for the legacy/manual research application: normal HTTP is tried first, then the same persistent Chromium session is used for protected metadata or attachment requests. The browser flow does not bypass CAPTCHAs; complete any interactive verification in the visible browser window.
 
-This legacy transport behavior is not enabled for Synapse scheduled ingestion.
+This legacy browser transport behavior is not enabled for Synapse scheduled ingestion.
 
 ## Output
 
@@ -196,10 +223,10 @@ The test suite is offline by default and should not incur model-provider cost.
 
 ## Operational cautions
 
-- Automated IDX website collection for Synapse stays disabled until an approved/licensed source is integrated.
-- Legacy/manual research tooling must retain response-shape and completeness checks when IDX website endpoints are used interactively.
+- Keep the scheduled collector behind both `IDX_DAILY_ENABLED=true` in GitHub repository variables and `SYNAPSE_DAILY_ENABLED=true` in its runtime environment.
 - Never use browser/CAPTCHA/proxy/rate-limit bypasses for scheduled Synapse collection.
+- Keep historical backfill and per-ticker fan-out disabled in scheduled mode.
 - Never commit `.env`, `data/`, cookies, or the browser profile.
 - Treat extracted attachment content as untrusted input.
-- Historical audit in the legacy research application can trigger expensive per-ticker completeness recovery; normal source-neutral Synapse ingestion does not.
-- A partial run keeps its checkpoints but does not claim successful authoritative metadata coverage.
+- Historical audit in the legacy research application can trigger expensive per-ticker completeness recovery; normal Synapse website collection does not.
+- Website source coverage is non-authoritative. A partial or failed run must never advance its durable checkpoint or claim successful coverage.
