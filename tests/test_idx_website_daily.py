@@ -7,7 +7,13 @@ import pytest
 from typer.testing import CliRunner
 
 from idx_digest.config import Settings
-from idx_digest.idx_website_cli import COLLECT_MAX_WINDOW, DAILY_FALLBACK_LOOKBACK, _daily_window, app
+from idx_digest.idx_website_cli import (
+    COLLECT_MAX_WINDOW,
+    DAILY_FALLBACK_LOOKBACK,
+    _collector_runtime_settings,
+    _daily_window,
+    app,
+)
 from idx_digest.sources.idx_website import IdxWebsiteCheckpoint
 
 
@@ -44,6 +50,31 @@ def test_daily_window_rejects_checkpoint_far_in_the_future() -> None:
     checkpoint = IdxWebsiteCheckpoint(latest_announced_at=(_now() + timedelta(minutes=10)).isoformat())
     with pytest.raises(ValueError, match="ahead of the current time"):
         _daily_window(settings, checkpoint, now=_now())
+
+
+def test_daily_runtime_uses_production_budgets_but_manual_keeps_e2e_caps() -> None:
+    settings = Settings(
+        _env_file=None,
+        synapse_daily_max_source_requests=50,
+        synapse_daily_max_attachments=100,
+        synapse_daily_max_ai_documents=100,
+    )
+
+    daily = _collector_runtime_settings(settings, run_mode="DAILY")
+    manual = _collector_runtime_settings(settings, run_mode="MANUAL_BACKFILL")
+
+    assert daily.synapse_daily_max_source_requests == 50
+    assert daily.synapse_daily_max_attachments == 100
+    assert daily.synapse_daily_max_ai_documents == 100
+    assert manual.synapse_daily_max_source_requests == 12
+    assert manual.synapse_daily_max_attachments == 20
+    assert manual.synapse_daily_max_ai_documents == 20
+    assert daily.idx_transport == "http"
+    assert daily.synapse_daily_transport == "http"
+    assert daily.synapse_daily_request_delay_seconds >= 10.0
+    assert daily.synapse_daily_request_jitter_seconds >= 2.0
+    assert daily.synapse_daily_allow_historical_backfill is False
+    assert daily.synapse_daily_allow_ticker_fanout is False
 
 
 def test_daily_command_requires_explicit_schedule_confirmation() -> None:
