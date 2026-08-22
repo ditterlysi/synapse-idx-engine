@@ -40,11 +40,19 @@ jobs:
           python-version: "3.11"
           cache: pip
 
+      - name: Install OCR dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y tesseract-ocr tesseract-ocr-eng tesseract-ocr-ind
+          tesseract --version
+
       - name: Install engine
         run: python -m pip install -e .
 
       - name: Run daily collector
-        run: synapse-idx-website daily --confirm-schedule | tee idx-daily-report.json
+        run: |
+          set -o pipefail
+          synapse-idx-website daily --confirm-schedule | tee idx-daily-report.json
 
       - name: Write run summary
         if: always()
