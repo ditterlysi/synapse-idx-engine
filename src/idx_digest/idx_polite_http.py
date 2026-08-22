@@ -10,6 +10,7 @@ from urllib.parse import urlparse
 import httpx
 
 OFFICIAL_IDX_HOSTS = {"idx.co.id", "www.idx.co.id", "idx.id", "www.idx.id"}
+CURRENT_IDX_BASE_URL = "https://www.idx.id"
 _WAF_MARKERS = ("cloudflare", "turnstile", "captcha", "challenge-platform", "cf-chl-")
 
 
@@ -35,7 +36,7 @@ class PoliteFetchClient:
     def __init__(
         self,
         *,
-        base_url: str = "https://www.idx.co.id",
+        base_url: str = CURRENT_IDX_BASE_URL,
         user_agent: str = "SynapseIDXEngine/0.16.0",
         request_delay_seconds: float = 10.0,
         request_jitter_seconds: float = 5.0,
