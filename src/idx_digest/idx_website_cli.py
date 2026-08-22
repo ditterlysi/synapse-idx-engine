@@ -80,6 +80,20 @@ def _daily_window(
     return start_at, end_at
 
 
+def _collector_runtime_settings(settings: Settings, *, run_mode: str) -> Settings:
+    runtime_base = settings if run_mode == "DAILY" else _tighten_e2e_settings(settings)
+    return runtime_base.model_copy(
+        update={
+            "idx_transport": "http",
+            "synapse_daily_transport": "http",
+            "synapse_daily_request_delay_seconds": max(10.0, settings.synapse_daily_request_delay_seconds),
+            "synapse_daily_request_jitter_seconds": max(2.0, settings.synapse_daily_request_jitter_seconds),
+            "synapse_daily_allow_historical_backfill": False,
+            "synapse_daily_allow_ticker_fanout": False,
+        }
+    )
+
+
 @app.command()
 def health() -> None:
     """Read collector health/checkpoint from Synapse without contacting IDX or AI."""
@@ -134,17 +148,7 @@ def _run_collection(
     if issues:
         raise typer.BadParameter("; ".join(issues))
 
-    runtime_base = settings if run_mode == "DAILY" else _tighten_e2e_settings(settings)
-    runtime_settings = runtime_base.model_copy(
-        update={
-            "idx_transport": "http",
-            "synapse_daily_transport": "http",
-            "synapse_daily_request_delay_seconds": max(10.0, settings.synapse_daily_request_delay_seconds),
-            "synapse_daily_request_jitter_seconds": max(2.0, settings.synapse_daily_request_jitter_seconds),
-            "synapse_daily_allow_historical_backfill": False,
-            "synapse_daily_allow_ticker_fanout": False,
-        }
-    )
+    runtime_settings = _collector_runtime_settings(settings, run_mode=run_mode)
     provider_runtime = resolve_ai_provider(runtime_settings)
 
     checkpoint_backend = "local" if checkpoint is not None else "synapse"
