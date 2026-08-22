@@ -9,6 +9,16 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 
+    # AI backend selection. Keep OpenRouter as the compatibility default while
+    # controlled Synapse E2E can opt into the direct Gemini path explicitly.
+    ai_provider: str = "openrouter"
+
+    # Direct Gemini Developer API. Gemini 3.5 Flash-Lite is GA, supports
+    # structured outputs, and currently has an official free API tier.
+    gemini_api_key: str = ""
+    gemini_base_url: str = "https://generativelanguage.googleapis.com/v1beta"
+    gemini_model: str = "gemini-3.5-flash-lite"
+
     # OpenRouter is OpenAI-compatible. Provider routing is pinned separately so
     # the selected model cannot silently run on a different host.
     openrouter_api_key: str = ""
@@ -31,7 +41,7 @@ class Settings(BaseSettings):
     idx_browser_navigation_timeout_ms: int = Field(default=60_000, ge=1_000)
     idx_browser_verification_timeout_seconds: int = Field(default=180, ge=5)
     # IDX/Cloudflare metadata throttling guardrails. These affect only IDX reads,
-    # never OpenRouter generation limits.
+    # never AI generation limits.
     idx_429_cooldown_initial_seconds: float = Field(default=12.0, ge=1.0, le=120.0)
     idx_429_cooldown_max_seconds: float = Field(default=90.0, ge=5.0, le=300.0)
     idx_429_jitter_seconds: float = Field(default=4.0, ge=0.0, le=30.0)
