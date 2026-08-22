@@ -1,0 +1,130 @@
+name: Real BBRI Snapshot Smoke
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - .github/workflows/real-bbri-snapshot-smoke.yml
+
+permissions:
+  contents: read
+
+jobs:
+  smoke:
+    if: github.head_ref == 'e2e/real-bbri-snapshot-20260822'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      AI_PROVIDER: gemini
+      GEMINI_MODEL: gemini-3.5-flash-lite
+      GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+      SYNAPSE_INTERNAL_BASE_URL: ${{ secrets.SYNAPSE_INTERNAL_BASE_URL || secrets.SYNAPSE_INTERNAL_URL || vars.SYNAPSE_INTERNAL_BASE_URL || vars.SYNAPSE_INTERNAL_URL }}
+      SYNAPSE_INGESTION_SECRET: ${{ secrets.SYNAPSE_INGESTION_SECRET || secrets.IDX_INGESTION_SECRET }}
+      SYNAPSE_DAILY_ENABLED: 'false'
+      APP_TIMEZONE: Asia/Jakarta
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+
+      - name: Install engine
+        run: python -m pip install -e .
+
+      - name: Verify required runtime secrets exist
+        shell: bash
+        run: |
+          test -n "$GEMINI_API_KEY" || { echo 'GEMINI_API_KEY is missing'; exit 1; }
+          test -n "$SYNAPSE_INTERNAL_BASE_URL" || { echo 'SYNAPSE_INTERNAL_BASE_URL is missing'; exit 1; }
+          test -n "$SYNAPSE_INGESTION_SECRET" || { echo 'SYNAPSE_INGESTION_SECRET is missing'; exit 1; }
+
+      - name: Verify BBRI relevance boundary
+        run: synapse-idx-engine api-check -t BBRI
+
+      - name: Download one explicit issuer-hosted BBRI disclosure PDF
+        shell: bash
+        run: |
+          mkdir -p real-smoke
+          curl --fail --silent --show-error --location \
+            --retry 2 --retry-delay 2 \
+            'https://www.ir-bri.com/newsroom/c21035bb89_c093fef910.pdf' \
+            --output real-smoke/bbri-material.pdf
+          python - <<'PY'
+          from pathlib import Path
+          path = Path('real-smoke/bbri-material.pdf')
+          data = path.read_bytes()
+          if not data.startswith(b'%PDF'):
+              raise SystemExit('issuer document is not a PDF')
+          if len(data) > 10_000_000:
+              raise SystemExit('issuer document exceeds 10 MB smoke-test cap')
+          print(f'issuer PDF verified: {len(data)} bytes')
+          PY
+
+      - name: Build non-authoritative official IDX public snapshot manifest
+        shell: bash
+        run: |
+          cat > real-smoke/manifest.json <<'JSON'
+          {
+            "schemaVersion": "synapse-source-manifest-v1",
+            "metadata": {
+              "sourceKind": "idx-public-snapshot-v1",
+              "sourcePage": "https://www.idx.id/en/listed-companies/disclosure/",
+              "capturedAt": "2026-08-22T10:57:00+07:00",
+              "captureMethod": "single-explicit-smoke-test",
+              "issuerDocumentUrl": "https://www.ir-bri.com/newsroom/c21035bb89_c093fef910.pdf"
+            },
+            "coverage": {
+              "complete": false
+            },
+            "disclosures": [
+              {
+                "externalId": "idx-public-bbri-20260119-transfer-share",
+                "ticker": "BBRI",
+                "announcedAt": "2026-01-19T15:04:00+07:00",
+                "title": "The Transfer of Share of PT Bank Rakyat Indonesia (Persero) Tbk",
+                "subject": "Material information or facts report - transfer of share",
+                "disclosureType": "MATERIAL_INFORMATION",
+                "sourceUrl": "https://www.ir-bri.com/newsroom/c21035bb89_c093fef910.pdf",
+                "metadata": {
+                  "issuer": "PT Bank Rakyat Indonesia (Persero) Tbk",
+                  "issuerCode": "BBRI",
+                  "letterNumber": "B.5.e-CSC/CSM/CGC/01/2026",
+                  "eventDate": "2026-01-05",
+                  "documentOrigin": "issuer-investor-relations"
+                },
+                "attachments": [
+                  {
+                    "path": "bbri-material.pdf",
+                    "filename": "BBRI_material_information_transfer_share_20260119.pdf",
+                    "contentType": "application/pdf",
+                    "sourceUrl": "https://www.ir-bri.com/newsroom/c21035bb89_c093fef910.pdf"
+                  }
+                ]
+              }
+            ]
+          }
+          JSON
+
+      - name: Run real BBRI public snapshot smoke test
+        shell: bash
+        run: |
+          set -o pipefail
+          synapse-idx-public-snapshot \
+            --manifest ./real-smoke/manifest.json \
+            --start '2026-01-19T14:30:00+07:00' \
+            --end '2026-01-19T15:30:00+07:00' \
+            --confirm-publish | tee real-smoke-report.json
+
+      - name: Upload smoke report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: real-bbri-public-snapshot-smoke-report
+          path: real-smoke-report.json
+          retention-days: 3
+          if-no-files-found: ignore
