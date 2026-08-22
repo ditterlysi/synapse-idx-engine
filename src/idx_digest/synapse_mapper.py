@@ -14,7 +14,7 @@ from .synapse_contract import (
     StructuredAnalysis,
 )
 
-TAXONOMY_VERSION = "synapse-taxonomy-v0.1-compat"
+TAXONOMY_VERSION = "synapse-taxonomy-v0.2-compat"
 BRIDGE_SCHEMA_VERSION = "announcement-v3-compat-v1"
 BRIDGE_PROMPT_SUFFIX = "+synapse-compat-v1"
 
@@ -34,7 +34,18 @@ _CATEGORY_PATTERNS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("ASSET_TRANSACTION", ("transaksi aset", "asset transaction")),
     ("CONTROLLER_CHANGE", ("perubahan pengendali", "change of control", "pengendali baru")),
     ("SHAREHOLDER_CHANGE", ("perubahan pemegang saham", "shareholder change")),
-    ("MANAGEMENT_CHANGE", ("perubahan pengurus", "perubahan direksi", "perubahan komisaris", "management change")),
+    (
+        "MANAGEMENT_CHANGE",
+        (
+            "perubahan pengurus",
+            "perubahan direksi",
+            "perubahan komisaris",
+            "management change",
+            "subsidiary management",
+            "pengelolaan perusahaan anak",
+            "penyesuaian pengelolaan perusahaan anak",
+        ),
+    ),
     ("TREASURY_SHARES", ("saham treasuri", "treasury shares", "treasury stock")),
     ("FREE_FLOAT", ("free float",)),
     ("RUPSLB", ("rupslb", "rapat umum pemegang saham luar biasa")),
@@ -110,6 +121,10 @@ def _strings(values: Any) -> list[str]:
     return [str(value).strip() for value in values if str(value).strip()]
 
 
+def _normalized_text(value: str) -> str:
+    return re.sub(r"\s+", " ", value).strip().lower()
+
+
 def _analysis_blob(title: str, summary: dict[str, Any]) -> str:
     parts = [title, str(summary.get("category") or "")]
     for key in (
@@ -121,7 +136,7 @@ def _analysis_blob(title: str, summary: dict[str, Any]) -> str:
         "listing_or_regulatory_events",
     ):
         parts.extend(_strings(summary.get(key)))
-    return re.sub(r"\s+", " ", " ".join(parts)).lower()
+    return _normalized_text(" ".join(parts))
 
 
 def taxonomy_tags(title: str, summary: dict[str, Any]) -> list[str]:
@@ -145,6 +160,21 @@ def taxonomy_tags(title: str, summary: dict[str, Any]) -> list[str]:
         tags.append("REGULATORY")
 
     return list(dict.fromkeys(tags or ["OTHER"]))
+
+
+def _headline_primary(title: str, tags: list[str]) -> tuple[str, bool]:
+    """Choose the main disclosure category from the headline when it is explicit.
+
+    Large filings often mention several unrelated corporate actions in notes. Those
+    events remain useful secondary tags, but they must not outrank a clear filing
+    identity such as Financial Statements, Dividend, Rights Issue, or Buyback.
+    """
+    headline = _normalized_text(title)
+    if headline:
+        for category, patterns in _CATEGORY_PATTERNS:
+            if any(pattern in headline for pattern in patterns):
+                return category, True
+    return tags[0], False
 
 
 def materiality_for(tags: Iterable[str], analysis_mode: str | None) -> str:
@@ -193,8 +223,9 @@ def build_structured_analysis(
     analysis_mode: str | None,
 ) -> StructuredAnalysis:
     tags = taxonomy_tags(title, summary)
-    primary = tags[0]
-    materiality = materiality_for(tags, analysis_mode)
+    primary, headline_anchored = _headline_primary(title, tags)
+    tags = [primary, *[tag for tag in tags if tag != primary]]
+    materiality = materiality_for([primary] if headline_anchored else tags, analysis_mode)
     executive_summary = str(summary.get("executive_summary") or "").strip()
     if not executive_summary:
         raise ValueError("announcement summary is missing executive_summary")
@@ -268,10 +299,16 @@ def build_structured_analysis(
             "Legacy announcement-v3 does not map each claim to an exact source file, so claim source_file_id is intentionally omitted.",
         ]
     )
+    if headline_anchored:
+        limitations.append(
+            "Primary category is anchored to the explicit disclosure headline; secondary tags may describe sub-events inside attachments."
+        )
 
     classification_confidence = 0.45 if primary == "OTHER" else 0.60
+    if headline_anchored:
+        classification_confidence = 0.75
     if materiality == "ROUTINE":
-        classification_confidence = 0.65
+        classification_confidence = max(classification_confidence, 0.65)
 
     return StructuredAnalysis(
         ticker=ticker,
