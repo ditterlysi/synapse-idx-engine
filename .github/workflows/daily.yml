@@ -25,7 +25,6 @@ jobs:
       SYNAPSE_INTERNAL_BASE_URL: ${{ secrets.SYNAPSE_INTERNAL_BASE_URL }}
       SYNAPSE_INGESTION_SECRET: ${{ secrets.SYNAPSE_INGESTION_SECRET }}
       SYNAPSE_DAILY_ENABLED: "true"
-      IDX_USER_AGENT: ${{ vars.IDX_USER_AGENT }}
       APP_TIMEZONE: Asia/Jakarta
       SYNAPSE_DAILY_TRANSPORT: http
       SYNAPSE_DAILY_ALLOW_HISTORICAL_BACKFILL: "false"
@@ -70,17 +69,25 @@ jobs:
                       "ok",
                       "status",
                       "runId",
-                      "announcementsFound",
-                      "announcementsNew",
-                      "filesDownloaded",
-                      "filesExtracted",
-                      "analysesCompleted",
                       "sourceRequests",
                       "checkpointCommitted",
                       "scheduleEnabled",
                   ):
                       if key in report:
                           lines.append(f"- **{key}**: `{report[key]}`")
+                  publish = report.get("publish")
+                  if isinstance(publish, dict):
+                      for key in (
+                          "disclosuresAvailable",
+                          "disclosuresCreated",
+                          "attachmentsStaged",
+                          "filesExtracted",
+                          "documentsAnalyzed",
+                          "analysesCompleted",
+                          "partialDisclosures",
+                      ):
+                          if key in publish:
+                              lines.append(f"- **publish.{key}**: `{publish[key]}`")
           summary_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
           PY
 
@@ -92,4 +99,4 @@ jobs:
           gh issue create \
             --repo "$GITHUB_REPOSITORY" \
             --title "[IDX Daily] Collector failure #${GITHUB_RUN_NUMBER}" \
-            --body "The scheduled IDX collector failed.\n\nRun: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}\nCommit: ${GITHUB_SHA}\n\nThe durable checkpoint is not advanced on failed processing, so the next successful run can retry the bounded window."
+            --body "The scheduled IDX collector failed. Run: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID} Commit: ${GITHUB_SHA}. The durable checkpoint is not advanced on failed processing, so the next successful run can retry the bounded window."
