@@ -35,6 +35,7 @@ idx-digest = "idx_digest.cli:app"
 synapse-idx-engine = "idx_digest.synapse_cli:app"
 synapse-idx-public-snapshot = "idx_digest.idx_public_snapshot_cli:app"
 synapse-issuer-public-snapshot = "idx_digest.issuer_public_snapshot_cli:app"
+synapse-idx-website = "idx_digest.idx_website_cli:app"
 
 [tool.setuptools.packages.find]
 where = ["src"]
