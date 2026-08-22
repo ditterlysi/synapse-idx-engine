@@ -12,13 +12,13 @@ from zoneinfo import ZoneInfo
 
 from dateutil.parser import isoparse
 
-from ..idx_polite_http import OFFICIAL_IDX_HOSTS, PoliteFetchClient
+from ..idx_polite_http import CURRENT_IDX_BASE_URL, OFFICIAL_IDX_HOSTS, PoliteFetchClient
 from ..source_contract import SourceAttachment, SourceContractError, SourceDisclosure, SourceWindowResult
 
 IDX_WEBSITE_SOURCE_ID = "idx-website"
 IDX_WEBSITE_EXTERNAL_ID_PREFIX = "idx-web-"
 IDX_ANNOUNCEMENT_ENDPOINT = "/primary/ListedCompany/GetAnnouncement"
-IDX_DISCLOSURE_PAGE = "https://www.idx.co.id/id/perusahaan-tercatat/keterbukaan-informasi"
+IDX_DISCLOSURE_PAGE = f"{CURRENT_IDX_BASE_URL}/id/perusahaan-tercatat/keterbukaan-informasi"
 CHECKPOINT_SCHEMA = "synapse-idx-website-checkpoint-v1"
 MAX_WINDOW = timedelta(hours=48)
 
@@ -93,7 +93,7 @@ def _official_attachment_url(base_url: str, value: object) -> str:
     parsed = urlparse(url)
     if parsed.scheme != "https" or parsed.hostname not in OFFICIAL_IDX_HOSTS:
         raise IdxWebsiteSourceError(f"IDX attachment URL is not on an official IDX HTTPS host: {url!r}")
-    return url
+    return parsed._replace(netloc="www.idx.id").geturl()
 
 
 def _safe_suffix(filename: str) -> str:
