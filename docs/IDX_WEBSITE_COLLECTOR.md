@@ -1,46 +1,53 @@
-# Automated IDX Website Collector MVP
+# Automated IDX Website Collector
 
-This document describes the guarded network source used to discover new public IDX disclosures with minimal routine operator involvement.
+This document describes the guarded network source used to discover new public IDX disclosures and its production scheduling gates.
 
-## Scope
+## Current phase
 
-The MVP reads the public IDX `ListedCompany/GetAnnouncement` JSON endpoint, stages official IDX attachments locally, and passes normalized disclosures into the existing source-neutral extraction, AI, and Synapse publishing pipeline.
+The collector has passed two production gates before scheduling:
 
-The production scheduler is intentionally **not enabled** by this phase.
+- **Phase A — collector MVP:** a controlled real BACA disclosure was discovered, its official attachment was downloaded and extracted, Gemini analysis completed, Synapse publish succeeded, and an immediate same-window repeat produced zero new disclosures, downloads, or AI calls.
+- **Phase B — durable reliability:** a fresh ephemeral runner restored the Synapse-backed checkpoint, repeated the bounded window using metadata requests only, produced zero duplicate work, and `health` reported healthy without contacting IDX or AI.
+- **Phase C — daily scheduler:** `.github/workflows/daily.yml` and `synapse-idx-website daily` provide a guarded recurring path. The workflow remains inert unless the repository variable `IDX_DAILY_ENABLED` is exactly `true`.
 
-## Design
+Website collection remains non-authoritative for coverage in every phase.
+
+## Source design
 
 - HTTP only; no browser fallback.
 - Official HTTPS IDX hosts only.
 - One request stream; no concurrency or per-ticker fan-out.
-- Default delay is at least 10 seconds between source requests in the CLI.
-- Small random jitter is added between requests.
+- At least 10 seconds between source requests in the guarded collector runtime, plus jitter.
 - Maximum two retries for transport/5xx failures.
 - HTTP 403, 429, auth/proxy challenges, HTML WAF/CAPTCHA/Turnstile responses, and redirects stop the run.
 - No proxy rotation, CAPTCHA solving, cookie farming, TLS impersonation, or browser challenge handling.
 - Collection windows are capped at 48 hours.
-- Pagination is capped at 10 pages of at most 100 rows each.
+- Pagination is capped and fails closed when the reported result set cannot be reconstructed safely.
 - Attachments are cached by source URL hash and downloaded sequentially.
 - Checkpoints keep a bounded set of recently observed IDX IDs.
-- A checkpoint is committed only after the Synapse ingestion result reports successful processing.
+- A checkpoint is committed only after Synapse processing succeeds.
+- Failed or partial processing never advances the durable checkpoint.
 - Website collection never claims authoritative coverage and never commits coverage.
 
-## Incremental behavior
+## Incremental and recovery behavior
 
-A run queries the requested date range because the public endpoint exposes calendar-date filters. Exact timestamps are filtered locally. The checkpoint stores recently observed raw IDX IDs so overlapping collection windows can be used safely:
+The public endpoint exposes calendar-date filters, while the adapter applies exact timestamp filtering locally. The durable checkpoint stores recently observed raw IDX IDs so overlapping windows are safe.
 
-1. query a bounded overlapping window;
-2. ignore IDs already present in the checkpoint;
-3. stage only attachments for unseen IDs;
-4. extract and analyze through the existing source-neutral runner;
-5. publish to Synapse;
-6. commit the new checkpoint only after processing succeeds.
+A scheduled run chooses its window as follows:
 
-If publishing or AI analysis fails, the old checkpoint remains intact, so a later run can retry the disclosure. Cached attachment files can be reused without another attachment request.
+1. use a conservative **30-hour minimum lookback**;
+2. compare that with `latestAnnouncedAt - IDX_INCREMENTAL_OVERLAP_DAYS` from the durable checkpoint;
+3. choose the earlier boundary so recovery can extend farther back when needed;
+4. cap the result at **48 hours**, which is the source contract maximum;
+5. deduplicate by the durable seen-ID checkpoint before staging attachments or invoking AI.
 
-## One-shot command
+This means a routine run always has overlap, while a stale checkpoint can stretch recovery up to 48 hours without enabling historical backfill.
 
-The command requires two explicit acknowledgements and does not enable any scheduler:
+If publishing, extraction, or AI analysis fails, the old checkpoint remains intact. A later successful run can retry the bounded overlap. Cached attachment files can be reused when they are available on the same runner, but correctness does not depend on ephemeral filesystem state.
+
+## Manual collector command
+
+Manual collection remains separately gated and does not imply that scheduling is enabled:
 
 ```bash
 synapse-idx-website collect \
@@ -50,8 +57,62 @@ synapse-idx-website collect \
   --confirm-publish
 ```
 
-Runtime configuration still requires the selected AI provider and the Synapse internal API credentials used by source-neutral ingestion.
+## Scheduled command
 
-## Current state
+One scheduled iteration is:
 
-This phase provides the collector code, CLI wiring, checkpoint/cache behavior, and offline tests. A controlled live probe should be performed before any recurring workflow is created. A recurring schedule remains a separate production gate.
+```bash
+SYNAPSE_DAILY_ENABLED=true synapse-idx-website daily --confirm-schedule
+```
+
+The command also validates `DailyPolicy`, requires the Synapse internal API credentials, restores durable source state, uses `runMode=DAILY`, and keeps authoritative coverage disabled.
+
+## GitHub Actions schedule
+
+`.github/workflows/daily.yml` declares:
+
+- cron `0 20 * * *`, which is **03:00 Asia/Jakarta** the next calendar day;
+- manual `workflow_dispatch` for controlled verification;
+- one production concurrency group with `cancel-in-progress: false`;
+- Gemini as the scheduled AI provider;
+- HTTP-only transport;
+- historical backfill disabled;
+- ticker fan-out disabled;
+- a 50-minute workflow timeout;
+- a GitHub Issue alert when the job fails.
+
+The scheduled job itself has an additional repository-level kill switch:
+
+```text
+IDX_DAILY_ENABLED=true
+```
+
+If that repository variable is missing or has any other value, the job is skipped and no IDX request is made.
+
+Required GitHub Actions secrets are:
+
+- `GEMINI_API_KEY`
+- `SYNAPSE_INTERNAL_BASE_URL`
+- `SYNAPSE_INGESTION_SECRET`
+
+## Health check
+
+`health` reads only Synapse source state:
+
+```bash
+synapse-idx-website health
+```
+
+It does not contact IDX or the AI provider. A failed scheduled run is also visible in the Synapse ingestion audit trail and triggers a GitHub Issue containing the Actions run URL.
+
+## Production gate after merge
+
+Do not treat the existence of the cron file as successful rollout. The release gate is:
+
+1. merge Phase C with CI green;
+2. confirm all three Actions secrets are configured;
+3. set repository variable `IDX_DAILY_ENABLED=true`;
+4. observe two consecutive scheduled runs;
+5. verify no duplicate disclosure processing, no unexpected attachment/AI replay, durable checkpoint advancement only on success, and no authoritative coverage commit.
+
+Only after those two scheduled runs pass should the recurring collector be considered fully released.
