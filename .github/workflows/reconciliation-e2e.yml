@@ -1,0 +1,122 @@
+name: Reconciliation BBRI E2E
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - '.github/workflows/reconciliation-e2e.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      SYNAPSE_INTERNAL_BASE_URL: ${{ secrets.SYNAPSE_INTERNAL_BASE_URL || secrets.SYNAPSE_INTERNAL_URL || vars.SYNAPSE_INTERNAL_BASE_URL || vars.SYNAPSE_INTERNAL_URL }}
+      SYNAPSE_INGESTION_SECRET: ${{ secrets.SYNAPSE_INGESTION_SECRET || secrets.IDX_INGESTION_SECRET }}
+      EXPECTED_DISCLOSURE_ID: 3b355113-1c2c-45e9-abe4-12fb4fa42f39
+      TEST_EXTERNAL_ID: recon-e2e-bbri-20260723-hash
+      SOURCE_SHA256: f21c65d3a929c6e7248231a8e10fdd45b517a96d2f35db460089a06b8eae2b02
+
+    steps:
+      - name: Validate runtime secrets
+        shell: bash
+        run: |
+          test -n "$SYNAPSE_INTERNAL_BASE_URL" || { echo 'Missing SYNAPSE_INTERNAL_BASE_URL'; exit 1; }
+          test -n "$SYNAPSE_INGESTION_SECRET" || { echo 'Missing SYNAPSE_INGESTION_SECRET'; exit 1; }
+
+      - name: Verify hash-based reconciliation
+        shell: python
+        run: |
+          import json
+          import os
+          import urllib.error
+          import urllib.request
+          from datetime import datetime, timezone
+
+          base = os.environ['SYNAPSE_INTERNAL_BASE_URL'].rstrip('/')
+          secret = os.environ['SYNAPSE_INGESTION_SECRET']
+          expected_id = os.environ['EXPECTED_DISCLOSURE_ID']
+          external_id = os.environ['TEST_EXTERNAL_ID']
+          sha256 = os.environ['SOURCE_SHA256']
+
+          headers = {
+              'Authorization': f'Bearer {secret}',
+              'Accept': 'application/json',
+              'Content-Type': 'application/json',
+              'User-Agent': 'SynapseReconciliationE2E/1.0',
+          }
+
+          def call(method, path, payload):
+              request = urllib.request.Request(
+                  base + path,
+                  data=json.dumps(payload).encode('utf-8'),
+                  headers=headers,
+                  method=method,
+              )
+              try:
+                  with urllib.request.urlopen(request, timeout=30) as response:
+                      return json.loads(response.read().decode('utf-8'))
+              except urllib.error.HTTPError as exc:
+                  body = exc.read().decode('utf-8', errors='replace')
+                  raise RuntimeError(f'{method} {path} failed with HTTP {exc.code}: {body}') from exc
+
+          run = call('POST', '/api/internal/idx/runs', {
+              'mode': 'MANUAL_BACKFILL',
+              'requestedFrom': '2026-07-22T20:50:00Z',
+              'requestedTo': '2026-07-22T21:00:00Z',
+              'engineVersion': 'reconciliation-e2e-v1',
+          })
+          run_id = run['runId']
+
+          try:
+              result = call('POST', '/api/internal/idx/disclosures/upsert', {
+                  'runId': run_id,
+                  'items': [{
+                      'idxAnnouncementId': external_id,
+                      'ticker': 'BBRI',
+                      'announcedAt': '2026-07-22T20:56:00Z',
+                      'title': 'Report on Material Information or Facts - Sale of PT BRI Manajemen Investasi Shares',
+                      'subject': 'Sale of 65% of PT BRI Manajemen Investasi shares to PT Danantara Asset Management',
+                      'disclosureType': 'MATERIAL_INFORMATION',
+                      'sourceUrl': 'https://reconciliation-e2e.invalid/bbri/fakta-material-ajb.pdf',
+                      'rawMetadata': {
+                          'sourceId': 'reconciliation-e2e',
+                          'sourceExternalId': external_id,
+                          'sourceAttachmentCount': 1,
+                          'sourceAttachmentSha256s': [sha256],
+                      },
+                  }],
+              })
+
+              item = result['items'][0]
+              report = {
+                  'runId': run_id,
+                  'idxAnnouncementId': item['idxAnnouncementId'],
+                  'disclosureId': item['disclosureId'],
+                  'created': item['created'],
+                  'expectedDisclosureId': expected_id,
+              }
+              print(json.dumps(report, indent=2, sort_keys=True))
+
+              if item['disclosureId'] != expected_id:
+                  raise RuntimeError(
+                      f"reconciliation returned unexpected disclosure id {item['disclosureId']}"
+                  )
+              if item['created'] is not False:
+                  raise RuntimeError('reconciliation created a duplicate disclosure')
+          finally:
+              call('PATCH', f'/api/internal/idx/runs/{run_id}', {
+                  'status': 'PARTIAL',
+                  'completedAt': datetime.now(timezone.utc).isoformat().replace('+00:00', 'Z'),
+                  'announcementsFound': 1,
+                  'announcementsNew': 0,
+                  'filesDownloaded': 0,
+                  'filesExtracted': 0,
+                  'analysesCompleted': 0,
+                  'sourceRequests': 0,
+                  'errorCode': 'RECONCILIATION_E2E_ONLY',
+                  'errorMessage': 'Metadata-only reconciliation verification; no processing or coverage.',
+              })
