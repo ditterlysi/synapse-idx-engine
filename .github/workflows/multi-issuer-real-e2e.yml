@@ -1,0 +1,195 @@
+name: Multi-Issuer Real Document E2E
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - '.github/workflows/multi-issuer-real-e2e.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      AI_PROVIDER: gemini
+      GEMINI_MODEL: gemini-3.5-flash-lite
+      GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+      SYNAPSE_INTERNAL_BASE_URL: ${{ secrets.SYNAPSE_INTERNAL_BASE_URL || secrets.SYNAPSE_INTERNAL_URL || vars.SYNAPSE_INTERNAL_BASE_URL || vars.SYNAPSE_INTERNAL_URL }}
+      SYNAPSE_INGESTION_SECRET: ${{ secrets.SYNAPSE_INGESTION_SECRET || secrets.IDX_INGESTION_SECRET }}
+      BMRI_URL: https://www.bankmandiri.co.id/documents/38268824/0/Website%2B-%2BKeterbukaan%2BInformasi%2B-%2BPenyesuaian%2BPengelolaan%2BPerusahaan%2BAnak%2BPerseroan%2B%284%29.pdf/cf67e5a1-3197-250d-cb8d-6ac532625e79?t=1776657699927
+      TLKM_URL: https://www.telkom.co.id/minio/show/data/lampiran/1780050149175_original_TW-I-2026-FS-Konsolidasian-Telkom-Bahasa.pdf
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install engine
+        run: python -m pip install -e .
+
+      - name: Validate runtime secrets
+        shell: bash
+        run: |
+          test -n "$GEMINI_API_KEY" || { echo 'Missing GEMINI_API_KEY'; exit 1; }
+          test -n "$SYNAPSE_INTERNAL_BASE_URL" || { echo 'Missing SYNAPSE_INTERNAL_BASE_URL'; exit 1; }
+          test -n "$SYNAPSE_INGESTION_SECRET" || { echo 'Missing SYNAPSE_INGESTION_SECRET'; exit 1; }
+
+      - name: Download two official issuer PDFs
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p e2e-real/bmri/files e2e-real/tlkm/files
+          curl --fail --location --silent --show-error --retry 2 "$BMRI_URL" -o e2e-real/bmri/files/bmri-subsidiary-management.pdf
+          curl --fail --location --silent --show-error --retry 2 "$TLKM_URL" -o e2e-real/tlkm/files/tlkm-1q26-financial-statements.pdf
+          python - <<'PY'
+          from pathlib import Path
+          for path in [
+              Path('e2e-real/bmri/files/bmri-subsidiary-management.pdf'),
+              Path('e2e-real/tlkm/files/tlkm-1q26-financial-statements.pdf'),
+          ]:
+              data = path.read_bytes()
+              if len(data) < 20_000:
+                  raise SystemExit(f'{path} unexpectedly small: {len(data)} bytes')
+              if not data.startswith(b'%PDF-'):
+                  raise SystemExit(f'{path} is not a PDF')
+              print(f'{path}: {len(data)} bytes, PDF validated')
+          PY
+
+      - name: Build bounded manifests
+        shell: python
+        run: |
+          import json
+          import os
+          from pathlib import Path
+
+          bmri_url = os.environ['BMRI_URL']
+          tlkm_url = os.environ['TLKM_URL']
+
+          manifests = [
+              (
+                  Path('e2e-real/bmri/manifest.json'),
+                  {
+                      'schemaVersion': 'synapse-source-manifest-v1',
+                      'coverage': {
+                          'complete': False,
+                          'startAt': '2026-01-27T00:00:00+07:00',
+                          'endAt': '2026-01-27T01:00:00+07:00',
+                      },
+                      'disclosures': [{
+                          'externalId': 'manual-real-bmri-20260127-subsidiary-management-e2e',
+                          'ticker': 'BMRI',
+                          'announcedAt': '2026-01-27T00:30:00+07:00',
+                          'title': 'Adjustment of Subsidiary Management of the Company',
+                          'subject': 'Governance adjustment for Bank Syariah Indonesia and accounting consolidation impact',
+                          'disclosureType': 'MATERIAL_INFORMATION',
+                          'sourceUrl': bmri_url,
+                          'metadata': {
+                              'sourceClass': 'official-issuer-document',
+                              'temporaryE2E': True,
+                              'timestampPrecision': 'DATE_ONLY_NORMALIZED_FOR_E2E',
+                              'officialDocumentEventDate': '2026-01-27',
+                          },
+                          'attachments': [{
+                              'path': 'files/bmri-subsidiary-management.pdf',
+                              'filename': 'bmri-subsidiary-management.pdf',
+                              'contentType': 'application/pdf',
+                              'sourceUrl': bmri_url,
+                          }],
+                      }],
+                  },
+              ),
+              (
+                  Path('e2e-real/tlkm/manifest.json'),
+                  {
+                      'schemaVersion': 'synapse-source-manifest-v1',
+                      'coverage': {
+                          'complete': False,
+                          'startAt': '2026-05-29T00:00:00+07:00',
+                          'endAt': '2026-05-29T01:00:00+07:00',
+                      },
+                      'disclosures': [{
+                          'externalId': 'manual-real-tlkm-20260529-1q26-financials-e2e',
+                          'ticker': 'TLKM',
+                          'announcedAt': '2026-05-29T00:30:00+07:00',
+                          'title': 'Unaudited Consolidated Financial Statements 1Q 2026',
+                          'subject': 'Telkom Indonesia consolidated financial statements for the three months ended March 31, 2026',
+                          'disclosureType': 'FINANCIAL_REPORT',
+                          'sourceUrl': tlkm_url,
+                          'metadata': {
+                              'sourceClass': 'official-issuer-document',
+                              'temporaryE2E': True,
+                              'timestampPrecision': 'DATE_ONLY_NORMALIZED_FOR_E2E',
+                              'officialResultsReleaseDate': '2026-05-29',
+                          },
+                          'attachments': [{
+                              'path': 'files/tlkm-1q26-financial-statements.pdf',
+                              'filename': 'tlkm-1q26-financial-statements.pdf',
+                              'contentType': 'application/pdf',
+                              'sourceUrl': tlkm_url,
+                          }],
+                      }],
+                  },
+              ),
+          ]
+
+          for path, payload in manifests:
+              path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding='utf-8')
+              print(path)
+
+      - name: Import BMRI official document
+        shell: bash
+        run: |
+          set -euo pipefail
+          synapse-idx-engine manual-import \
+            --manifest e2e-real/bmri/manifest.json \
+            --start '2026-01-27T00:00:00+07:00' \
+            --end '2026-01-27T01:00:00+07:00' \
+            --confirm-publish | tee bmri-report.json
+
+      - name: Import TLKM official document
+        shell: bash
+        run: |
+          set -euo pipefail
+          synapse-idx-engine manual-import \
+            --manifest e2e-real/tlkm/manifest.json \
+            --start '2026-05-29T00:00:00+07:00' \
+            --end '2026-05-29T01:00:00+07:00' \
+            --confirm-publish | tee tlkm-report.json
+
+      - name: Verify conservative batch semantics
+        shell: python
+        run: |
+          import json
+
+          for ticker, path in [('BMRI', 'bmri-report.json'), ('TLKM', 'tlkm-report.json')]:
+              with open(path, encoding='utf-8') as handle:
+                  report = json.load(handle)
+              assert report['ok'] is True, report
+              assert report['processingOk'] is True, report
+              assert report['status'] == 'PARTIAL', report
+              assert report['coverageCommitted'] is False, report
+              assert report['coverageAuthoritative'] is False, report
+              assert report['scheduleEnabled'] is False, report
+              assert report['sourceId'] == 'manual-manifest', report
+              assert report['publish']['attachmentsStaged'] == 1, report
+              assert report['publish']['filesExtracted'] == 1, report
+              assert report['publish']['documentsAnalyzed'] == 1, report
+              assert report['publish']['analysesCompleted'] == 1, report
+              assert report['publish']['errors'] == [], report
+              assert report['budget']['source_requests'] == 0, report
+              print(json.dumps({
+                  'ticker': ticker,
+                  'runId': report['runId'],
+                  'created': report['publish']['disclosuresCreated'],
+                  'analysesCompleted': report['publish']['analysesCompleted'],
+                  'status': report['status'],
+                  'coverageCommitted': report['coverageCommitted'],
+                  'sourceRequests': report['budget']['source_requests'],
+              }, sort_keys=True))
