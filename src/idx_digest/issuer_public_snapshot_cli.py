@@ -21,6 +21,10 @@ from .synapse_cli import (
 )
 from .timeutils import parse_boundary
 
+# Preserve the existing test/injection seam while routing snapshot CLIs through
+# the provenance-aware runner.
+SourceIngestionRunner = SnapshotSourceIngestionRunner
+
 app = typer.Typer(
     add_completion=False,
     help="Import an offline snapshot captured from an issuer's official public website.",
@@ -65,7 +69,7 @@ def import_snapshot(
     provider_runtime = resolve_ai_provider(_tighten_e2e_settings(settings))
     source = IssuerPublicSnapshotSource(manifest)
     try:
-        result = SnapshotSourceIngestionRunner(
+        result = SourceIngestionRunner(
             provider_runtime.settings,
             source,
             summarizer_factory=provider_runtime.summarizer_factory,
