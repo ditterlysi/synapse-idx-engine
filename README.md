@@ -2,9 +2,11 @@
 
 IDX Disclosure Digest collects IDX disclosure metadata and attachments, extracts their text, and builds isolated per-issuer research summaries through OpenRouter. It includes a CLI, a local browser-based workspace, durable SQLite checkpoints, recovery tools, and shareable exports.
 
+The repository also contains the source-neutral Synapse ingestion path. That path is intentionally separated from automated IDX website collection and can use either direct Gemini or the existing OpenRouter backend for analysis.
+
 ## What it does
 
-- Queries IDX announcements for an exact Jakarta-time interval.
+- Queries IDX announcements for an exact Jakarta-time interval in the legacy/manual research tooling.
 - Supports all listed issuers or one ticker.
 - Downloads PDF, XLSX, DOCX, HTML, and text attachments.
 - Extracts native text first and uses Indonesian/English OCR for sparse PDF pages.
@@ -12,6 +14,7 @@ IDX Disclosure Digest collects IDX disclosure metadata and attachments, extracts
 - Deduplicates announcements, attachments, and already-completed model work.
 - Produces document, announcement, and company-window summaries without mixing issuers.
 - Saves files, summaries, prompts, audits, progress, and recovery state locally.
+- Provides a source-neutral `DisclosureSource` ingestion boundary for Synapse without requiring automated IDX website collection.
 
 ## Quick start
 
@@ -25,13 +28,50 @@ python verify_install.py
 idx-digest gui
 ```
 
-Add `OPENROUTER_API_KEY` to `.env` before using model-backed summaries. OCR also requires Tesseract and the Indonesian language pack.
+Add `OPENROUTER_API_KEY` to `.env` before using the legacy model-backed research summaries. OCR also requires Tesseract and the Indonesian language pack.
 
 See [INSTALLATION.md](INSTALLATION.md) for the complete macOS, Linux, Docker, upgrade, and troubleshooting instructions.
 
+## Synapse source-neutral ingestion
+
+`manual-import` exercises the source-neutral Synapse path without contacting IDX for source collection:
+
+```text
+local/approved source adapter
+        ↓
+extraction
+        ↓
+configured AI provider
+        ↓
+strict schema validation
+        ↓
+Synapse Internal API
+```
+
+AI selection is handled by `src/idx_digest/ai_provider.py`:
+
+```env
+# Direct Gemini
+AI_PROVIDER=gemini
+GEMINI_API_KEY=...
+GEMINI_MODEL=gemini-3.5-flash-lite
+
+# Or OpenRouter compatibility
+AI_PROVIDER=openrouter
+OPENROUTER_API_KEY=...
+OPENROUTER_MODEL=deepseek/deepseek-v4-flash-0731
+OPENROUTER_PROVIDER=deepinfra
+```
+
+Only the selected provider's API key is required for this source-neutral path. The direct Gemini adapter uses GenerateContent structured output and keeps the existing local schema validation.
+
+Automated IDX website collection remains disabled for Synapse pending an approved/licensed source integration. Scheduled daily execution also remains disabled.
+
+See [docs/MANUAL_IMPORT.md](docs/MANUAL_IMPORT.md) and [docs/SOURCE_ADAPTERS.md](docs/SOURCE_ADAPTERS.md).
+
 ## Common commands
 
-Run one issuer in an exact interval:
+Run one issuer in an exact interval with the legacy research CLI:
 
 ```bash
 idx-digest run \
@@ -98,10 +138,11 @@ Use `idx-digest --help` and `idx-digest COMMAND --help` for all options.
 
 ## Configuration
 
-The checked-in `.env.example` documents every setting. The default provider policy pins the configured model to DeepInfra through OpenRouter and disables silent provider fallback:
+The checked-in `.env.example` documents every setting. For the legacy OpenRouter path, the default provider policy pins the configured model to DeepInfra and disables silent provider fallback:
 
 ```env
-OPENROUTER_API_KEY=sk-or-v1-...
+AI_PROVIDER=openrouter
+OPENROUTER_API_KEY=...
 OPENROUTER_BASE_URL=https://openrouter.ai/api/v1
 OPENROUTER_MODEL=deepseek/deepseek-v4-flash-0731
 OPENROUTER_PROVIDER=deepinfra
@@ -111,7 +152,9 @@ OPENROUTER_REQUIRE_PARAMETERS=true
 
 The local GUI binds to `127.0.0.1` by default and has no authentication. Do not expose it to a public interface.
 
-IDX transport defaults to `auto`: normal HTTP is tried first, then the same persistent Chromium session is used for protected metadata or attachment requests. The browser flow does not bypass CAPTCHAs; complete any interactive verification in the visible browser window.
+IDX transport defaults to `auto` for the legacy/manual research application: normal HTTP is tried first, then the same persistent Chromium session is used for protected metadata or attachment requests. The browser flow does not bypass CAPTCHAs; complete any interactive verification in the visible browser window.
+
+This legacy transport behavior is not enabled for Synapse scheduled ingestion.
 
 ## Output
 
@@ -149,13 +192,14 @@ pytest -q
 python verify_install.py
 ```
 
-The test suite is offline by default and should not incur OpenRouter cost.
+The test suite is offline by default and should not incur model-provider cost.
 
 ## Operational cautions
 
-- IDX website endpoints are not presented as a stable public API; retain response-shape and completeness checks.
-- Use conservative request pacing and a descriptive user agent.
+- Automated IDX website collection for Synapse stays disabled until an approved/licensed source is integrated.
+- Legacy/manual research tooling must retain response-shape and completeness checks when IDX website endpoints are used interactively.
+- Never use browser/CAPTCHA/proxy/rate-limit bypasses for scheduled Synapse collection.
 - Never commit `.env`, `data/`, cookies, or the browser profile.
 - Treat extracted attachment content as untrusted input.
-- Historical audit can trigger expensive per-ticker completeness recovery; normal incremental runs do not.
-- A partial run keeps its checkpoints but does not claim successful metadata coverage.
+- Historical audit in the legacy research application can trigger expensive per-ticker completeness recovery; normal source-neutral Synapse ingestion does not.
+- A partial run keeps its checkpoints but does not claim successful authoritative metadata coverage.

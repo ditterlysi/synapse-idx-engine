@@ -7,6 +7,7 @@ from pathlib import Path
 import typer
 from dateutil.parser import isoparse
 
+from .ai_provider import ai_provider_issues, resolve_ai_provider
 from .config import Settings
 from .daily_guardrails import DailyPolicy, DailyPolicyError
 from .source_ingestion import SourceIngestionRunner
@@ -52,8 +53,17 @@ def _live_e2e_issues(settings: Settings) -> list[str]:
         issues.append("SYNAPSE_INTERNAL_BASE_URL is required")
     if not settings.synapse_ingestion_secret.get_secret_value().strip():
         issues.append("SYNAPSE_INGESTION_SECRET is required")
-    if not settings.openrouter_api_key.strip():
-        issues.append("OPENROUTER_API_KEY is required for the live E2E analysis path")
+
+    # This dormant website-coupled pipeline has not been migrated to the provider
+    # abstraction. Keep it explicitly OpenRouter-only while source automation is
+    # under compliance hold. Approved source adapters use SourceIngestionRunner.
+    if settings.ai_provider.strip().lower() != "openrouter":
+        issues.append(
+            "The held legacy live E2E pipeline requires AI_PROVIDER=openrouter; "
+            "Gemini is supported by source-neutral ingestion"
+        )
+    else:
+        issues.extend(ai_provider_issues(settings, context="the legacy live E2E analysis path"))
     return list(dict.fromkeys(issues))
 
 
@@ -67,8 +77,7 @@ def _manual_import_issues(settings: Settings) -> list[str]:
         issues.append("SYNAPSE_INTERNAL_BASE_URL is required")
     if not settings.synapse_ingestion_secret.get_secret_value().strip():
         issues.append("SYNAPSE_INGESTION_SECRET is required")
-    if not settings.openrouter_api_key.strip():
-        issues.append("OPENROUTER_API_KEY is required for manual disclosure analysis")
+    issues.extend(ai_provider_issues(settings, context="manual disclosure analysis"))
     return list(dict.fromkeys(issues))
 
 
@@ -174,6 +183,7 @@ def doctor() -> None:
         "engine": "synapse-idx-engine",
         "version": "0.16.0",
         "daily_enabled": settings.synapse_daily_enabled,
+        "aiProvider": settings.ai_provider,
         "synapse_configured": bool(
             settings.synapse_internal_base_url.strip()
             and settings.synapse_ingestion_secret.get_secret_value().strip()
@@ -236,7 +246,7 @@ def manual_import(
     confirm_publish: bool = typer.Option(
         False,
         "--confirm-publish",
-        help="Required acknowledgement that the import may call OpenRouter and write to Synapse.",
+        help="Required acknowledgement that the import may call the configured AI provider and write to Synapse.",
     ),
 ) -> None:
     """Process a local manifest through extraction, AI, and Synapse without source-network access."""
@@ -263,12 +273,13 @@ def manual_import(
     if issues:
         raise typer.BadParameter("; ".join(issues))
 
-    import_settings = _tighten_e2e_settings(settings)
+    provider_runtime = resolve_ai_provider(_tighten_e2e_settings(settings))
     source = ManualManifestSource(manifest, allow_complete_attestation=False)
     try:
         result = SourceIngestionRunner(
-            import_settings,
+            provider_runtime.settings,
             source,
+            summarizer_factory=provider_runtime.summarizer_factory,
             allow_coverage_commit=False,
             require_external_id_prefix="manual-",
         ).run_window(start_at=start_at, end_at=end_at)
