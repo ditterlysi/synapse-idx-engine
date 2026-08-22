@@ -134,7 +134,8 @@ def _run_collection(
     if issues:
         raise typer.BadParameter("; ".join(issues))
 
-    runtime_settings = _tighten_e2e_settings(settings).model_copy(
+    runtime_base = settings if run_mode == "DAILY" else _tighten_e2e_settings(settings)
+    runtime_settings = runtime_base.model_copy(
         update={
             "idx_transport": "http",
             "synapse_daily_transport": "http",
