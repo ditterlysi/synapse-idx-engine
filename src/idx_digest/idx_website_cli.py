@@ -8,7 +8,7 @@ import typer
 
 from .ai_provider import resolve_ai_provider
 from .config import Settings
-from .idx_polite_http import PoliteFetchClient
+from .idx_polite_http import CURRENT_IDX_BASE_URL, PoliteFetchClient
 from .source_ingestion import SourceIngestionRunner
 from .sources.idx_website import (
     IDX_WEBSITE_EXTERNAL_ID_PREFIX,
@@ -91,7 +91,7 @@ def collect(
     staging_dir = (settings.data_dir / "idx-website-cache").expanduser().resolve()
 
     client = PoliteFetchClient(
-        base_url=settings.idx_base_url,
+        base_url=CURRENT_IDX_BASE_URL,
         user_agent=settings.idx_user_agent,
         request_delay_seconds=runtime_settings.synapse_daily_request_delay_seconds,
         request_jitter_seconds=runtime_settings.synapse_daily_request_jitter_seconds,
