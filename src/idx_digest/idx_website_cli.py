@@ -15,7 +15,12 @@ from .sources.idx_website import (
     FileCheckpointStore,
     IdxWebsiteSource,
 )
-from .synapse_cli import _build_manual_import_report, _manual_import_issues, _tighten_e2e_settings, _validate_explicit_timestamp
+from .synapse_cli import (
+    _build_manual_import_report,
+    _manual_import_issues,
+    _tighten_e2e_settings,
+    _validate_explicit_timestamp,
+)
 from .timeutils import parse_boundary
 
 app = typer.Typer(
