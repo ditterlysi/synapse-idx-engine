@@ -46,7 +46,7 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p issuer-snapshot/files
-          curl --fail --location --silent --show-error --retry 2 \
+          curl --http1.1 --fail --location --silent --show-error --retry 2 \
             --user-agent 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/151 Safari/537.36' \
             --referer "$SOURCE_PAGE" \
             "$PDF_URL" -o issuer-snapshot/files/bmri-sustainability-bond-prospectus.pdf
