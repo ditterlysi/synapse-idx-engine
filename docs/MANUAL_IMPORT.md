@@ -11,20 +11,40 @@ Given a local `synapse-source-manifest-v1` bundle, the command:
 3. verifies attachment existence and SHA-256 where supplied;
 4. stages the local bytes without downloading them again;
 5. extracts PDF/XLSX/DOCX/HTML/text through the existing extractor stack;
-6. runs the existing document + announcement OpenRouter summaries;
+6. runs the existing document + announcement summaries through the configured AI provider;
 7. maps the validated `announcement-v3` summary through the conservative Synapse compatibility taxonomy;
 8. publishes disclosure metadata, optional source-backed file metadata, and structured analysis through the authenticated Synapse Internal API;
 9. leaves automated IDX website collection and scheduled daily execution disabled.
 
 The engine still never receives a Supabase service-role credential.
 
+## AI provider
+
+The source-neutral manual path now supports two analysis transports:
+
+- `AI_PROVIDER=gemini` — direct Gemini Developer API. This is the recommended controlled-E2E path.
+- `AI_PROVIDER=openrouter` — existing compatibility path through OpenRouter.
+
+The direct Gemini adapter deliberately reuses the existing Synapse prompt rendering, retry policy, audit persistence, concurrency gates, and local JSON-schema validation. Only the upstream HTTP request/response shape changes.
+
+For the controlled free-tier path, use the stable `gemini-3.5-flash-lite` model. It supports structured outputs and is suited to document parsing/data extraction.
+
 ## Required configuration
 
-Runtime/environment values:
+Recommended direct Gemini configuration:
 
 ```env
+AI_PROVIDER=gemini
+GEMINI_API_KEY=<your Gemini Developer API key>
+GEMINI_MODEL=gemini-3.5-flash-lite
 SYNAPSE_INTERNAL_BASE_URL=https://<your-synapse-worker-origin>
 SYNAPSE_INGESTION_SECRET=<same engine secret configured on Synapse>
+```
+
+OpenRouter remains available when explicitly selected:
+
+```env
+AI_PROVIDER=openrouter
 OPENROUTER_API_KEY=<your OpenRouter key>
 ```
 
@@ -67,7 +87,7 @@ synapse-idx-engine manual-import \
   --confirm-publish
 ```
 
-`--confirm-publish` is required because the command can incur OpenRouter usage and write disclosure/analysis data to the configured Synapse environment.
+`--confirm-publish` is required because the command can call the configured AI provider and write disclosure/analysis data to the configured Synapse environment.
 
 ## Expected status semantics
 
