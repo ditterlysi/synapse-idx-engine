@@ -11,24 +11,52 @@ Given a local `synapse-source-manifest-v1` bundle, the command:
 3. verifies attachment existence and SHA-256 where supplied;
 4. stages the local bytes without downloading them again;
 5. extracts PDF/XLSX/DOCX/HTML/text through the existing extractor stack;
-6. runs the existing document + announcement OpenRouter summaries;
+6. runs document + announcement summaries through the configured AI provider;
 7. maps the validated `announcement-v3` summary through the conservative Synapse compatibility taxonomy;
 8. publishes disclosure metadata, optional source-backed file metadata, and structured analysis through the authenticated Synapse Internal API;
 9. leaves automated IDX website collection and scheduled daily execution disabled.
 
 The engine still never receives a Supabase service-role credential.
 
+## AI provider abstraction
+
+The source-neutral path resolves its analysis backend through `ai_provider.py` rather than selecting a provider inside the CLI or mutating shared settings.
+
+Supported backends:
+
+- `AI_PROVIDER=gemini` — direct Gemini Developer API through `GeminiSummarizer`;
+- `AI_PROVIDER=openrouter` — the existing OpenRouter compatibility backend.
+
+Provider resolution returns an isolated runtime settings copy plus the summarizer factory and provenance identity. This preserves the current `SourceIngestionRunner` compatibility contract while ensuring Synapse records the provider/model that actually executed the analysis.
+
+The direct Gemini adapter deliberately reuses the existing prompt rendering, retry policy, audit persistence, concurrency gates, and local JSON-schema validation. Only the upstream HTTP request/response shape changes. Gemini structured output is sent through GenerateContent using `responseMimeType=application/json` and `responseJsonSchema`.
+
+The controlled production E2E was verified with `gemini-3.5-flash-lite`, including a READY disclosure, VALID analysis, and provenance `google-gemini / gemini-3.5-flash-lite`.
+
 ## Required configuration
 
-Runtime/environment values:
+Direct Gemini:
 
 ```env
+AI_PROVIDER=gemini
+GEMINI_API_KEY=<your Gemini Developer API key>
+GEMINI_MODEL=gemini-3.5-flash-lite
 SYNAPSE_INTERNAL_BASE_URL=https://<your-synapse-worker-origin>
 SYNAPSE_INGESTION_SECRET=<same engine secret configured on Synapse>
-OPENROUTER_API_KEY=<your OpenRouter key>
 ```
 
-`SYNAPSE_DAILY_ENABLED` does **not** need to be enabled for a manual import. Manual import is an explicit user-triggered offline-source flow, not the scheduled source collector.
+OpenRouter compatibility backend:
+
+```env
+AI_PROVIDER=openrouter
+OPENROUTER_API_KEY=<your OpenRouter key>
+OPENROUTER_MODEL=<configured model>
+OPENROUTER_PROVIDER=<pinned provider>
+SYNAPSE_INTERNAL_BASE_URL=https://<your-synapse-worker-origin>
+SYNAPSE_INGESTION_SECRET=<same engine secret configured on Synapse>
+```
+
+Only the selected provider's API key is required. `SYNAPSE_DAILY_ENABLED` does **not** need to be enabled for a manual import. Manual import is an explicit user-triggered offline-source flow, not the scheduled source collector.
 
 Do not commit secrets or a populated `.env` file.
 
@@ -67,7 +95,7 @@ synapse-idx-engine manual-import \
   --confirm-publish
 ```
 
-`--confirm-publish` is required because the command can incur OpenRouter usage and write disclosure/analysis data to the configured Synapse environment.
+`--confirm-publish` is required because the command can call the configured AI provider and write disclosure/analysis data to the configured Synapse environment.
 
 ## Expected status semantics
 
@@ -122,7 +150,7 @@ The offline manifest itself performs zero source-network requests.
 
 ## Compliance boundary
 
-This command does not change the current source-policy hold:
+This provider work does not change the current source-policy hold:
 
 - automated IDX website collection remains disabled;
 - no browser fallback is enabled for scheduled collection;
@@ -132,4 +160,4 @@ This command does not change the current source-policy hold:
 - no per-ticker mass fan-out;
 - no GitHub Actions daily schedule is enabled.
 
-A future approved/licensed provider should implement `DisclosureSource` and stage normalized attachments into the same runner. Only a source that provides authoritative completeness evidence, plus an explicitly coverage-authorized runner, may commit production coverage.
+The existing website-coupled live E2E pipeline remains dormant and OpenRouter-only while it is under compliance hold. A future approved/licensed provider should implement `DisclosureSource` and stage normalized attachments into the source-neutral runner. Only a source that provides authoritative completeness evidence, plus an explicitly coverage-authorized runner, may commit production coverage.
