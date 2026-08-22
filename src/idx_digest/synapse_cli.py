@@ -9,6 +9,7 @@ from dateutil.parser import isoparse
 
 from .config import Settings
 from .daily_guardrails import DailyPolicy, DailyPolicyError
+from .gemini_summarizer import GeminiSummarizer
 from .source_ingestion import SourceIngestionRunner
 from .sources.manual_manifest import ManualManifestSource
 from .synapse_client import SynapseClient, SynapseClientConfigurationError
@@ -27,6 +28,21 @@ SOURCE_AUTOMATION_ENABLED = False
 SOURCE_COMPLIANCE_HOLD = (
     "Automated IDX website collection is disabled pending an approved/licensed source integration"
 )
+
+
+def _ai_provider_issues(settings: Settings, *, context: str) -> list[str]:
+    provider = settings.ai_provider.strip().lower()
+    if provider == "gemini":
+        if not settings.gemini_api_key.strip():
+            return [f"GEMINI_API_KEY is required for {context} when AI_PROVIDER=gemini"]
+        if not settings.gemini_model.strip():
+            return [f"GEMINI_MODEL is required for {context} when AI_PROVIDER=gemini"]
+        return []
+    if provider == "openrouter":
+        if not settings.openrouter_api_key.strip():
+            return [f"OPENROUTER_API_KEY is required for {context} when AI_PROVIDER=openrouter"]
+        return []
+    return ["AI_PROVIDER must be either 'gemini' or 'openrouter'"]
 
 
 def _integration_issues(settings: Settings) -> list[str]:
@@ -52,8 +68,7 @@ def _live_e2e_issues(settings: Settings) -> list[str]:
         issues.append("SYNAPSE_INTERNAL_BASE_URL is required")
     if not settings.synapse_ingestion_secret.get_secret_value().strip():
         issues.append("SYNAPSE_INGESTION_SECRET is required")
-    if not settings.openrouter_api_key.strip():
-        issues.append("OPENROUTER_API_KEY is required for the live E2E analysis path")
+    issues.extend(_ai_provider_issues(settings, context="the live E2E analysis path"))
     return list(dict.fromkeys(issues))
 
 
@@ -67,8 +82,7 @@ def _manual_import_issues(settings: Settings) -> list[str]:
         issues.append("SYNAPSE_INTERNAL_BASE_URL is required")
     if not settings.synapse_ingestion_secret.get_secret_value().strip():
         issues.append("SYNAPSE_INGESTION_SECRET is required")
-    if not settings.openrouter_api_key.strip():
-        issues.append("OPENROUTER_API_KEY is required for manual disclosure analysis")
+    issues.extend(_ai_provider_issues(settings, context="manual disclosure analysis"))
     return list(dict.fromkeys(issues))
 
 
@@ -174,6 +188,7 @@ def doctor() -> None:
         "engine": "synapse-idx-engine",
         "version": "0.16.0",
         "daily_enabled": settings.synapse_daily_enabled,
+        "aiProvider": settings.ai_provider,
         "synapse_configured": bool(
             settings.synapse_internal_base_url.strip()
             and settings.synapse_ingestion_secret.get_secret_value().strip()
@@ -236,7 +251,7 @@ def manual_import(
     confirm_publish: bool = typer.Option(
         False,
         "--confirm-publish",
-        help="Required acknowledgement that the import may call OpenRouter and write to Synapse.",
+        help="Required acknowledgement that the import may call the configured AI provider and write to Synapse.",
     ),
 ) -> None:
     """Process a local manifest through extraction, AI, and Synapse without source-network access."""
@@ -265,12 +280,16 @@ def manual_import(
 
     import_settings = _tighten_e2e_settings(settings)
     source = ManualManifestSource(manifest, allow_complete_attestation=False)
+    runner_kwargs: dict[str, object] = {}
+    if import_settings.ai_provider.strip().lower() == "gemini":
+        runner_kwargs["summarizer_factory"] = GeminiSummarizer
     try:
         result = SourceIngestionRunner(
             import_settings,
             source,
             allow_coverage_commit=False,
             require_external_id_prefix="manual-",
+            **runner_kwargs,
         ).run_window(start_at=start_at, end_at=end_at)
     except Exception as exc:
         typer.echo(
