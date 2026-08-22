@@ -1,18 +1,7 @@
 name: Controlled Manual IDX E2E
 
 on:
-  push:
-    branches:
-      - e2e/manual-manifest-20260822
-    paths:
-      - ".github/workflows/manual-e2e.yml"
-      - "e2e-bundle/**"
-  pull_request:
-    branches:
-      - main
-    paths:
-      - ".github/workflows/manual-e2e.yml"
-      - "e2e-bundle/**"
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -26,7 +15,7 @@ jobs:
       SYNAPSE_INGESTION_SECRET: ${{ secrets.SYNAPSE_INGESTION_SECRET || secrets.IDX_INGESTION_SECRET }}
       OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
       OPENROUTER_MODEL: google/gemma-4-26b-a4b-it:free
-      OPENROUTER_PROVIDER: darkbloom
+      OPENROUTER_PROVIDER: google-ai-studio
       OPENROUTER_ALLOW_FALLBACKS: "false"
       OPENROUTER_REQUIRE_PARAMETERS: "false"
       SYNAPSE_DAILY_ENABLED: "false"
