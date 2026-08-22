@@ -22,8 +22,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     env:
-      SYNAPSE_INTERNAL_BASE_URL: ${{ secrets.SYNAPSE_INTERNAL_BASE_URL }}
-      SYNAPSE_INGESTION_SECRET: ${{ secrets.SYNAPSE_INGESTION_SECRET }}
+      SYNAPSE_INTERNAL_BASE_URL: ${{ secrets.SYNAPSE_INTERNAL_BASE_URL || secrets.SYNAPSE_INTERNAL_URL || vars.SYNAPSE_INTERNAL_BASE_URL || vars.SYNAPSE_INTERNAL_URL }}
+      SYNAPSE_INGESTION_SECRET: ${{ secrets.SYNAPSE_INGESTION_SECRET || secrets.IDX_INGESTION_SECRET }}
       OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
       SYNAPSE_DAILY_ENABLED: "false"
       APP_TIMEZONE: Asia/Jakarta
@@ -45,10 +45,10 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          test -n "$SYNAPSE_INTERNAL_BASE_URL" || { echo "Missing SYNAPSE_INTERNAL_BASE_URL repository secret"; exit 1; }
-          test -n "$SYNAPSE_INGESTION_SECRET" || { echo "Missing SYNAPSE_INGESTION_SECRET repository secret"; exit 1; }
+          test -n "$SYNAPSE_INTERNAL_BASE_URL" || { echo "Missing Synapse internal base URL secret/variable"; exit 1; }
+          test -n "$SYNAPSE_INGESTION_SECRET" || { echo "Missing Synapse ingestion secret"; exit 1; }
           test -n "$OPENROUTER_API_KEY" || { echo "Missing OPENROUTER_API_KEY repository secret"; exit 1; }
-          echo "Required runtime secrets are configured."
+          echo "Required runtime configuration is present."
 
       - name: Verify Synapse authenticated boundary
         run: synapse-idx-engine api-check -t BBRI
