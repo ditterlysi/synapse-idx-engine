@@ -1,0 +1,82 @@
+name: IDX Website Diagnostic E2E
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - '.github/workflows/idx-website-diagnostic-e2e.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  diagnose:
+    if: github.head_ref == 'feat/automated-idx-collector-mvp'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      AI_PROVIDER: openrouter
+      OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+      SYNAPSE_INTERNAL_BASE_URL: ${{ secrets.SYNAPSE_INTERNAL_BASE_URL || secrets.SYNAPSE_INTERNAL_URL || vars.SYNAPSE_INTERNAL_BASE_URL || vars.SYNAPSE_INTERNAL_URL }}
+      SYNAPSE_INGESTION_SECRET: ${{ secrets.SYNAPSE_INGESTION_SECRET || secrets.IDX_INGESTION_SECRET }}
+      IDX_BASE_URL: https://www.idx.id
+      IDX_PAGE_SIZE: '100'
+      SYNAPSE_DAILY_REQUEST_DELAY_SECONDS: '10'
+      SYNAPSE_DAILY_REQUEST_JITTER_SECONDS: '2'
+      SYNAPSE_DAILY_MAX_SOURCE_REQUESTS: '10'
+      SYNAPSE_DAILY_MAX_ATTACHMENTS: '5'
+      SYNAPSE_DAILY_MAX_DOWNLOAD_BYTES: '50000000'
+      SYNAPSE_DAILY_MAX_AI_DOCUMENTS: '5'
+      SYNAPSE_DAILY_MAX_RUN_SECONDS: '900'
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+
+      - name: Install engine
+        run: python -m pip install -e .
+
+      - name: Validate runtime secrets
+        shell: bash
+        run: |
+          test -n "$OPENROUTER_API_KEY" || { echo 'Missing OPENROUTER_API_KEY'; exit 1; }
+          test -n "$SYNAPSE_INTERNAL_BASE_URL" || { echo 'Missing SYNAPSE_INTERNAL_BASE_URL'; exit 1; }
+          test -n "$SYNAPSE_INGESTION_SECRET" || { echo 'Missing SYNAPSE_INGESTION_SECRET'; exit 1; }
+
+      - name: Check Synapse boundary
+        run: synapse-idx-engine api-check -t BACA
+
+      - name: Collect one real BACA disclosure and preserve report
+        id: collect
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -o pipefail
+          mkdir -p data
+          synapse-idx-website collect \
+            --start '2026-08-21T22:10:00+07:00' \
+            --end '2026-08-21T22:11:30+07:00' \
+            --checkpoint './data/idx-website-e2e-checkpoint.json' \
+            --enable-source \
+            --confirm-publish \
+            | tee first-report.json
+
+      - name: Print collector report
+        if: always()
+        shell: bash
+        run: |
+          if test -f first-report.json; then
+            cat first-report.json
+          else
+            echo 'first-report.json was not created'
+          fi
+
+      - name: Fail diagnostic gate when collector failed
+        if: steps.collect.outcome == 'failure'
+        run: exit 1
