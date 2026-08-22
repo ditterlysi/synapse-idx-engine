@@ -7,7 +7,6 @@ from .config import Settings
 from .gemini_summarizer import GeminiSummarizer
 from .summarizer import OpenRouterSummarizer
 
-
 SummarizerFactory = Callable[[Settings], Any]
 
 
