@@ -2,7 +2,7 @@
 
 All notable changes and migration requirements are consolidated here. Upgrades preserve `.env`, SQLite data, downloaded attachments, extracted text, prompt profiles, run history, and the browser profile unless an entry explicitly says otherwise.
 
-Use [INSTALLATION.md](INSTALLATION.md) for the current upgrade procedure.
+Use [INSTALLATION.md](INSTALLATION.md) for the current upgrade procedure. Historical archive/patch extraction commands have been removed because they no longer describe the current source tree.
 
 ## 0.17.0
 
@@ -35,6 +35,7 @@ Use [INSTALLATION.md](INSTALLATION.md) for the current upgrade procedure.
 - Manual imports remain non-authoritative for production coverage by default; successful processing can therefore report `processingOk=true` while the ingestion run remains `PARTIAL` and `coverageCommitted=false`.
 - Local attachment paths are never published. File metadata is sent only when a real HTTP(S) source URL exists; no URL is fabricated.
 - Reused conservative attachment, byte, AI-document, and runtime budgets for manual source processing.
+- Automated IDX public-website/internal-endpoint collection remained disabled under the earlier source-compliance hold at this release; that hold was superseded by the guarded production website collector documented in 0.17.0.
 - Added offline runner and CLI regression tests plus operational documentation in `docs/MANUAL_IMPORT.md`.
 
 ## 0.15.5
@@ -181,10 +182,10 @@ Source download/extraction remains mandatory before these decisions. XLSX and PD
 
 ### Smart financial-source hotfix
 
-- Recognized standalone `LK` statement PDFs as primary evidence.
-- Added priority yield so queued foreground reducers are not starved by new bulk chunks.
-- Separated generating work from provider/disclosure/validation waits in live counters.
-- Added request-class latency estimates.
+- Merged cached announcement JSON with durable attachment rows during financial refinement.
+- Preferred XLSX plus human-readable `LK`/report PDF and used generic statement PDFs as fallback.
+- Added zero-cost dry-run selection previews and full-bundle preflight.
+- Reduced financial chunks to at most 22,000 characters and improved malformed-JSON retry headroom.
 
 ## 0.4.3
 
