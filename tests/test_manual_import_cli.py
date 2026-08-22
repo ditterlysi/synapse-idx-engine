@@ -84,11 +84,13 @@ def test_manual_import_runs_without_enabling_daily_or_website_automation(tmp_pat
             settings,
             source,
             *,
+            summarizer_factory=None,
             allow_coverage_commit=False,
             require_external_id_prefix=None,
         ):
             captured["settings"] = settings
             captured["source"] = source
+            captured["summarizer_factory"] = summarizer_factory
             captured["allow_coverage_commit"] = allow_coverage_commit
             captured["require_external_id_prefix"] = require_external_id_prefix
 
@@ -122,8 +124,56 @@ def test_manual_import_runs_without_enabling_daily_or_website_automation(tmp_pat
     assert captured["allow_complete_attestation"] is False
     assert captured["allow_coverage_commit"] is False
     assert captured["require_external_id_prefix"] == "manual-"
+    assert captured["summarizer_factory"] is not None
     assert captured["settings"].synapse_daily_enabled is False
     assert synapse_cli.SOURCE_AUTOMATION_ENABLED is False
+
+
+def test_manual_import_accepts_gemini_without_openrouter_key(tmp_path, monkeypatch) -> None:
+    captured: dict[str, object] = {}
+
+    class FakeManualManifestSource:
+        def __init__(self, manifest, *, allow_complete_attestation=False):
+            captured["allow_complete_attestation"] = allow_complete_attestation
+
+    class FakeSourceRunner:
+        def __init__(self, settings, source, **kwargs):
+            captured["settings"] = settings
+            captured["summarizer_factory"] = kwargs.get("summarizer_factory")
+
+        def run_window(self, *, start_at, end_at):
+            return _result()
+
+    monkeypatch.setattr(synapse_cli, "ManualManifestSource", FakeManualManifestSource)
+    monkeypatch.setattr(synapse_cli, "SourceIngestionRunner", FakeSourceRunner)
+
+    env = _manual_env(tmp_path)
+    env.update(
+        {
+            "AI_PROVIDER": "gemini",
+            "GEMINI_API_KEY": "test-gemini-key",
+            "OPENROUTER_API_KEY": "",
+        }
+    )
+    result = runner.invoke(
+        synapse_cli.app,
+        [
+            "manual-import",
+            "--manifest",
+            str(tmp_path / "manifest.json"),
+            "--start",
+            "2026-08-21T20:00:00+07:00",
+            "--end",
+            "2026-08-21T21:00:00+07:00",
+            "--confirm-publish",
+        ],
+        env=env,
+    )
+
+    assert result.exit_code == 0, result.output
+    assert captured["settings"].openrouter_provider == "google-gemini"
+    assert captured["settings"].openrouter_model == "gemini-3.5-flash-lite"
+    assert captured["summarizer_factory"].__name__ == "GeminiSummarizer"
 
 
 def test_manual_import_rejects_window_over_two_hours(tmp_path) -> None:
