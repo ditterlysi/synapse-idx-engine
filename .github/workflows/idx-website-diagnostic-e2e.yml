@@ -15,8 +15,9 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     env:
-      AI_PROVIDER: openrouter
-      OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+      AI_PROVIDER: gemini
+      GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+      GEMINI_MODEL: gemini-3.5-flash-lite
       SYNAPSE_INTERNAL_BASE_URL: ${{ secrets.SYNAPSE_INTERNAL_BASE_URL || secrets.SYNAPSE_INTERNAL_URL || vars.SYNAPSE_INTERNAL_BASE_URL || vars.SYNAPSE_INTERNAL_URL }}
       SYNAPSE_INGESTION_SECRET: ${{ secrets.SYNAPSE_INGESTION_SECRET || secrets.IDX_INGESTION_SECRET }}
       IDX_BASE_URL: https://www.idx.id
@@ -45,7 +46,7 @@ jobs:
       - name: Validate runtime secrets
         shell: bash
         run: |
-          test -n "$OPENROUTER_API_KEY" || { echo 'Missing OPENROUTER_API_KEY'; exit 1; }
+          test -n "$GEMINI_API_KEY" || { echo 'Missing GEMINI_API_KEY'; exit 1; }
           test -n "$SYNAPSE_INTERNAL_BASE_URL" || { echo 'Missing SYNAPSE_INTERNAL_BASE_URL'; exit 1; }
           test -n "$SYNAPSE_INGESTION_SECRET" || { echo 'Missing SYNAPSE_INGESTION_SECRET'; exit 1; }
 
