@@ -1,0 +1,68 @@
+name: Controlled Manual IDX E2E
+
+on:
+  push:
+    branches:
+      - e2e/manual-manifest-20260822
+    paths:
+      - ".github/workflows/manual-e2e.yml"
+      - "e2e-bundle/**"
+
+permissions:
+  contents: read
+
+jobs:
+  manual-e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      SYNAPSE_INTERNAL_BASE_URL: ${{ secrets.SYNAPSE_INTERNAL_BASE_URL }}
+      SYNAPSE_INGESTION_SECRET: ${{ secrets.SYNAPSE_INGESTION_SECRET }}
+      OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+      SYNAPSE_DAILY_ENABLED: "false"
+      APP_TIMEZONE: Asia/Jakarta
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install engine
+        run: python -m pip install -e "."
+
+      - name: Verify required runtime secrets exist
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$SYNAPSE_INTERNAL_BASE_URL" || { echo "Missing SYNAPSE_INTERNAL_BASE_URL repository secret"; exit 1; }
+          test -n "$SYNAPSE_INGESTION_SECRET" || { echo "Missing SYNAPSE_INGESTION_SECRET repository secret"; exit 1; }
+          test -n "$OPENROUTER_API_KEY" || { echo "Missing OPENROUTER_API_KEY repository secret"; exit 1; }
+          echo "Required runtime secrets are configured."
+
+      - name: Verify Synapse authenticated boundary
+        run: synapse-idx-engine api-check -t BBRI
+
+      - name: Run controlled manual manifest E2E
+        shell: bash
+        run: |
+          set -euo pipefail
+          synapse-idx-engine manual-import \
+            --manifest ./e2e-bundle/manifest.json \
+            --start '2026-08-22T06:00:00+07:00' \
+            --end '2026-08-22T08:00:00+07:00' \
+            --confirm-publish \
+            | tee manual-e2e-report.json
+
+      - name: Upload E2E report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: controlled-manual-e2e-report
+          path: manual-e2e-report.json
+          if-no-files-found: ignore
+          retention-days: 3
