@@ -351,7 +351,8 @@ class IdxWebsiteSource:
         seen_checkpoint = set(checkpoint.seen_ids)
         metadata_items, pagination = self._collect_metadata(start_at=start_at, end_at=end_at)
 
-        ids_observed: list[str] = []
+        ids_in_window: list[str] = []
+        already_seen_in_window = 0
         candidates: list[tuple[str, dict[str, Any], datetime]] = []
         for item in metadata_items:
             announcement = item.get("pengumuman")
@@ -360,11 +361,12 @@ class IdxWebsiteSource:
             raw_id = str(announcement.get("Id2") or "").strip()
             if not raw_id:
                 continue
-            ids_observed.append(raw_id)
             announced_at = _announcement_time(announcement.get("TglPengumuman"), self.timezone)
             if not (start_at <= announced_at <= end_at):
                 continue
+            ids_in_window.append(raw_id)
             if raw_id in seen_checkpoint:
+                already_seen_in_window += 1
                 continue
             candidates.append((raw_id, item, announced_at))
 
@@ -415,7 +417,11 @@ class IdxWebsiteSource:
             if newest_at is None or announced_at > newest_at:
                 newest_at = announced_at
 
-        merged_seen = list(dict.fromkeys([*checkpoint.seen_ids, *ids_observed]))
+        # The IDX endpoint filters by calendar date, not exact timestamp. Only
+        # IDs that are actually inside the requested timestamp window are safe
+        # to checkpoint. Otherwise an out-of-window row from the same calendar
+        # date can be marked seen before it has ever been processed.
+        merged_seen = list(dict.fromkeys([*checkpoint.seen_ids, *ids_in_window]))
         latest_value = checkpoint.latest_announced_at
         if newest_at is not None:
             latest_value = newest_at.isoformat()
@@ -431,6 +437,9 @@ class IdxWebsiteSource:
             "reportedTotal": pagination["reportedTotal"],
             "paginationStrategy": pagination["paginationStrategy"],
             "metadataRowsCollected": pagination["metadataRowsCollected"],
+            "metadataRowsInRequestedWindow": len(ids_in_window),
+            "alreadySeenInRequestedWindow": already_seen_in_window,
+            "newCandidates": len(candidates),
             "checkpointSeenIds": len(seen_checkpoint),
             "disclosuresNew": len(disclosures),
             "attachmentDownloads": attachment_downloads,
