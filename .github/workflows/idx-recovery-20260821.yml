@@ -4,6 +4,9 @@ on:
   push:
     branches:
       - ops/idx-recovery-20260821
+  pull_request:
+    branches:
+      - main
 
 concurrency:
   group: idx-recovery-20260821
@@ -14,6 +17,7 @@ permissions:
 
 jobs:
   recover:
+    if: github.event_name == 'push' || github.head_ref == 'ops/idx-recovery-20260821'
     runs-on: ubuntu-latest
     timeout-minutes: 180
     env:
