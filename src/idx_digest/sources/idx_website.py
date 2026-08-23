@@ -26,6 +26,13 @@ IDX_ANNOUNCEMENT_ENDPOINT = "/primary/ListedCompany/GetAnnouncement"
 IDX_DISCLOSURE_PAGE = f"{CURRENT_IDX_BASE_URL}/id/perusahaan-tercatat/keterbukaan-informasi"
 CHECKPOINT_SCHEMA = "synapse-idx-website-checkpoint-v1"
 MAX_WINDOW = timedelta(hours=48)
+NON_STOCK_PRODUCT_FLAGS = (
+    "EfekEmiten_ETF",
+    "EfekEmiten_DIRE",
+    "EfekEmiten_DINFRA",
+    "EfekEmiten_EBA",
+    "EfekEmiten_SPEI",
+)
 
 
 class IdxWebsiteSourceError(SourceContractError):
@@ -375,6 +382,7 @@ class IdxWebsiteSource:
         processed_ids: list[str] = []
         nonissuer_row_ids: list[str] = []
         unsupported_ticker_row_ids: list[str] = []
+        nonstock_product_row_ids: list[str] = []
         unavailable_attachment_row_ids: list[str] = []
         attachment_downloads = 0
         attachment_cache_hits = 0
@@ -390,6 +398,10 @@ class IdxWebsiteSource:
             if re.fullmatch(r"[A-Z0-9.]{1,10}", ticker) is None:
                 if len(unsupported_ticker_row_ids) < 20:
                     unsupported_ticker_row_ids.append(raw_id)
+                continue
+            if any(bool(announcement.get(flag)) for flag in NON_STOCK_PRODUCT_FLAGS):
+                if len(nonstock_product_row_ids) < 20:
+                    nonstock_product_row_ids.append(raw_id)
                 continue
 
             title = str(announcement.get("JudulPengumuman") or "").strip()
@@ -469,6 +481,8 @@ class IdxWebsiteSource:
             "nonIssuerRowIds": nonissuer_row_ids,
             "unsupportedTickerRowsSkipped": len(unsupported_ticker_row_ids),
             "unsupportedTickerRowIds": unsupported_ticker_row_ids,
+            "nonStockProductRowsSkipped": len(nonstock_product_row_ids),
+            "nonStockProductRowIds": nonstock_product_row_ids,
             "unavailableAttachmentRowsSkipped": len(unavailable_attachment_row_ids),
             "unavailableAttachmentRowIds": unavailable_attachment_row_ids,
             "issuerDisclosuresProcessed": len(disclosures),

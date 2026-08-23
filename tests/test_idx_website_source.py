@@ -327,3 +327,44 @@ def test_source_skips_issuer_with_404_attachment_without_checkpointing_it(tmp_pa
     checkpoint = json.loads(checkpoint_path.read_text(encoding="utf-8"))
     assert valid_id in checkpoint["seenIds"]
     assert broken_id not in checkpoint["seenIds"]
+
+
+def test_source_skips_valid_format_etf_ticker_without_checkpointing_it(tmp_path):
+    checkpoint_path = tmp_path / "checkpoint.json"
+    payload = _payload()
+    etf_id = "20260821175507-1684/MAJORIS/VIII/2026_id-id"
+    payload["ResultCount"] = 2
+    payload["Replies"] = [
+        {
+            "pengumuman": {
+                "Id2": etf_id,
+                "NoPengumuman": "1684/MAJORIS/VIII/2026",
+                "TglPengumuman": "2026-08-22T20:10:00",
+                "JudulPengumuman": "Laporan Harian atas Nilai Aktiva Bersih dan Komposisi Portofolio",
+                "Kode_Emiten": "XMIG",
+                "EfekEmiten_ETF": True,
+            },
+            "attachments": [],
+        },
+        *payload["Replies"],
+    ]
+    client = FakePoliteClient(payload)
+    source = IdxWebsiteSource(
+        client,
+        checkpoint_store=FileCheckpointStore(checkpoint_path),
+        staging_dir=tmp_path / "cache",
+    )
+
+    result = source.collect_window(
+        start_at=datetime(2026, 8, 22, 19, 0, tzinfo=JAKARTA),
+        end_at=datetime(2026, 8, 22, 21, 0, tzinfo=JAKARTA),
+    )
+
+    assert [item.ticker for item in result.disclosures] == ["BBRI"]
+    assert result.diagnostics["nonStockProductRowsSkipped"] == 1
+    assert result.diagnostics["nonStockProductRowIds"] == [etf_id]
+
+    source.commit_checkpoint()
+    checkpoint = json.loads(checkpoint_path.read_text(encoding="utf-8"))
+    assert checkpoint["seenIds"] == ["20260822201500-TEST-BBRI_id-id"]
+    assert etf_id not in checkpoint["seenIds"]
