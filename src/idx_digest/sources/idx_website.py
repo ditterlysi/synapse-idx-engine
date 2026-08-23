@@ -371,6 +371,8 @@ class IdxWebsiteSource:
             candidates.append((raw_id, item, announced_at))
 
         disclosures: list[SourceDisclosure] = []
+        processed_ids: list[str] = []
+        nonissuer_row_ids: list[str] = []
         attachment_downloads = 0
         attachment_cache_hits = 0
         newest_at: datetime | None = None
@@ -378,9 +380,14 @@ class IdxWebsiteSource:
         for raw_id, item, announced_at in sorted(candidates, key=lambda row: row[2]):
             announcement = item.get("pengumuman") or {}
             ticker = str(announcement.get("Kode_Emiten") or "").strip().upper()
+            if not ticker:
+                if len(nonissuer_row_ids) < 20:
+                    nonissuer_row_ids.append(raw_id)
+                continue
+
             title = str(announcement.get("JudulPengumuman") or "").strip()
-            if not ticker or not title:
-                raise IdxWebsiteSourceError(f"IDX announcement {raw_id!r} is missing ticker/title")
+            if not title:
+                raise IdxWebsiteSourceError(f"IDX issuer announcement {raw_id!r} is missing title")
 
             attachments_raw = item.get("attachments") or []
             if not isinstance(attachments_raw, list):
@@ -414,14 +421,16 @@ class IdxWebsiteSource:
                     },
                 )
             )
+            processed_ids.append(raw_id)
             if newest_at is None or announced_at > newest_at:
                 newest_at = announced_at
 
-        # The IDX endpoint filters by calendar date, not exact timestamp. Only
-        # IDs that are actually inside the requested timestamp window are safe
-        # to checkpoint. Otherwise an out-of-window row from the same calendar
-        # date can be marked seen before it has ever been processed.
-        merged_seen = list(dict.fromkeys([*checkpoint.seen_ids, *ids_in_window]))
+        # IDX can return exchange/market announcements through the same endpoint
+        # with no issuer ticker. Those rows are outside the issuer-disclosure
+        # product scope and must not fail the whole window or poison checkpoint
+        # state. Only issuer disclosures successfully normalized by this adapter
+        # are added to seenIds.
+        merged_seen = list(dict.fromkeys([*checkpoint.seen_ids, *processed_ids]))
         latest_value = checkpoint.latest_announced_at
         if newest_at is not None:
             latest_value = newest_at.isoformat()
@@ -440,6 +449,9 @@ class IdxWebsiteSource:
             "metadataRowsInRequestedWindow": len(ids_in_window),
             "alreadySeenInRequestedWindow": already_seen_in_window,
             "newCandidates": len(candidates),
+            "nonIssuerRowsSkipped": len(nonissuer_row_ids),
+            "nonIssuerRowIds": nonissuer_row_ids,
+            "issuerDisclosuresProcessed": len(disclosures),
             "checkpointSeenIds": len(seen_checkpoint),
             "disclosuresNew": len(disclosures),
             "attachmentDownloads": attachment_downloads,

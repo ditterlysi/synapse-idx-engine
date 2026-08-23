@@ -5,7 +5,9 @@ from datetime import datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
-from idx_digest.sources.idx_website import FileCheckpointStore, IdxWebsiteSource
+import pytest
+
+from idx_digest.sources.idx_website import FileCheckpointStore, IdxWebsiteSource, IdxWebsiteSourceError
 
 
 JAKARTA = ZoneInfo("Asia/Jakarta")
@@ -96,6 +98,8 @@ def test_source_stages_new_disclosure_and_commits_checkpoint_explicitly(tmp_path
     assert result.diagnostics["metadataRowsInRequestedWindow"] == 1
     assert result.diagnostics["alreadySeenInRequestedWindow"] == 0
     assert result.diagnostics["newCandidates"] == 1
+    assert result.diagnostics["nonIssuerRowsSkipped"] == 0
+    assert result.diagnostics["issuerDisclosuresProcessed"] == 1
     assert checkpoint_path.exists() is False
 
     source.commit_checkpoint()
@@ -135,6 +139,8 @@ def test_checkpoint_skips_already_seen_disclosure_and_avoids_redownload(tmp_path
     assert result.diagnostics["metadataRowsInRequestedWindow"] == 1
     assert result.diagnostics["alreadySeenInRequestedWindow"] == 1
     assert result.diagnostics["newCandidates"] == 0
+    assert result.diagnostics["nonIssuerRowsSkipped"] == 0
+    assert result.diagnostics["issuerDisclosuresProcessed"] == 0
     assert result.diagnostics["disclosuresNew"] == 0
 
 
@@ -163,3 +169,64 @@ def test_source_filters_records_outside_exact_requested_time_without_checkpointi
     checkpoint = json.loads(checkpoint_path.read_text(encoding="utf-8"))
     assert checkpoint["seenIds"] == []
     assert checkpoint["latestAnnouncedAt"] is None
+
+
+def test_source_skips_nonissuer_rows_without_checkpointing_them(tmp_path):
+    checkpoint_path = tmp_path / "checkpoint.json"
+    payload = _payload()
+    nonissuer_id = "20260821163757-Peng-PK-00059/BEI.PLP/08-2026_id-id"
+    payload["ResultCount"] = 2
+    payload["Replies"] = [
+        {
+            "pengumuman": {
+                "Id2": nonissuer_id,
+                "NoPengumuman": "Peng-PK-00059/BEI.PLP/08-2026",
+                "TglPengumuman": "2026-08-22T20:10:00",
+                "JudulPengumuman": "Pengumuman Bursa",
+                "Kode_Emiten": "",
+            },
+            "attachments": [],
+        },
+        *payload["Replies"],
+    ]
+    client = FakePoliteClient(payload)
+    source = IdxWebsiteSource(
+        client,
+        checkpoint_store=FileCheckpointStore(checkpoint_path),
+        staging_dir=tmp_path / "cache",
+    )
+
+    result = source.collect_window(
+        start_at=datetime(2026, 8, 22, 19, 0, tzinfo=JAKARTA),
+        end_at=datetime(2026, 8, 22, 21, 0, tzinfo=JAKARTA),
+    )
+
+    assert len(result.disclosures) == 1
+    assert result.disclosures[0].ticker == "BBRI"
+    assert result.diagnostics["metadataRowsInRequestedWindow"] == 2
+    assert result.diagnostics["newCandidates"] == 2
+    assert result.diagnostics["nonIssuerRowsSkipped"] == 1
+    assert result.diagnostics["nonIssuerRowIds"] == [nonissuer_id]
+    assert result.diagnostics["issuerDisclosuresProcessed"] == 1
+
+    source.commit_checkpoint()
+    checkpoint = json.loads(checkpoint_path.read_text(encoding="utf-8"))
+    assert checkpoint["seenIds"] == ["20260822201500-TEST-BBRI_id-id"]
+    assert nonissuer_id not in checkpoint["seenIds"]
+
+
+def test_source_still_fails_closed_when_issuer_title_is_missing(tmp_path):
+    payload = _payload()
+    payload["Replies"][0]["pengumuman"]["JudulPengumuman"] = ""
+    client = FakePoliteClient(payload)
+    source = IdxWebsiteSource(
+        client,
+        checkpoint_store=FileCheckpointStore(tmp_path / "checkpoint.json"),
+        staging_dir=tmp_path / "cache",
+    )
+
+    with pytest.raises(IdxWebsiteSourceError, match="missing title"):
+        source.collect_window(
+            start_at=datetime(2026, 8, 22, 19, 0, tzinfo=JAKARTA),
+            end_at=datetime(2026, 8, 22, 21, 0, tzinfo=JAKARTA),
+        )
