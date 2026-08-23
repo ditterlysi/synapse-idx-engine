@@ -1,23 +1,19 @@
-name: IDX Recovery 2026-08-21
+name: IDX Recovery Resume 2026-08-21
 
 on:
   push:
     branches:
-      - ops/idx-recovery-20260821
-  pull_request:
-    branches:
-      - main
+      - ops/idx-recovery-resume-20260821
 
 concurrency:
-  group: idx-recovery-20260821
-  cancel-in-progress: true
+  group: idx-recovery-resume-20260821
+  cancel-in-progress: false
 
 permissions:
   contents: read
 
 jobs:
   recover:
-    if: github.event_name == 'push' || github.head_ref == 'ops/idx-recovery-20260821'
     runs-on: ubuntu-latest
     timeout-minutes: 180
     env:
@@ -48,7 +44,7 @@ jobs:
       - name: Install engine
         run: python -m pip install -e .
 
-      - name: Recover poisoned-checkpoint gaps
+      - name: Resume failed and remaining recovery windows
         run: |
           python - <<'PY'
           from __future__ import annotations
@@ -71,16 +67,10 @@ jobs:
           )
           from idx_digest.timeutils import parse_boundary
 
+          # Resume only failed/cancelled and not-yet-run windows. The successful
+          # 17:00-17:30 bucket is intentionally excluded.
           WINDOWS = [
-              ("2026-08-21T00:00:00+07:00", "2026-08-21T09:00:00+07:00"),
-              ("2026-08-21T09:00:00+07:00", "2026-08-21T10:00:00+07:00"),
-              ("2026-08-21T10:00:00+07:00", "2026-08-21T11:00:00+07:00"),
-              ("2026-08-21T11:00:00+07:00", "2026-08-21T13:00:00+07:00"),
-              ("2026-08-21T13:00:00+07:00", "2026-08-21T15:00:00+07:00"),
-              ("2026-08-21T15:00:00+07:00", "2026-08-21T16:00:00+07:00"),
-              ("2026-08-21T16:00:00+07:00", "2026-08-21T16:30:00+07:00"),
               ("2026-08-21T16:30:00+07:00", "2026-08-21T17:00:00+07:00"),
-              ("2026-08-21T17:00:00+07:00", "2026-08-21T17:30:00+07:00"),
               ("2026-08-21T17:30:00+07:00", "2026-08-21T17:35:00+07:00"),
               ("2026-08-21T17:35:00+07:00", "2026-08-21T17:40:00+07:00"),
               ("2026-08-21T17:40:00+07:00", "2026-08-21T17:50:00+07:00"),
@@ -93,21 +83,12 @@ jobs:
               ("2026-08-21T22:00:00+07:00", "2026-08-21T22:47:00+07:00"),
           ]
 
-          EXISTING_IDS = (
-              "20260820232958-B.028-Corpsec-ETT-BEEF-VIII-2026_id-id",
-              "20260821221047-BXS/08/021/005/2026_id-id",
-              "20260822092619-012/HDK/SP/VIII/2026_id-id",
-              "20260822174532-LK/22082026/0001/1_id-id",
-              "20260822191348-001/KI/CORSEC/VIII/2026_id-id",
-              "20260823014614-LK/23082026/0001/1_id-id",
-          )
-
           settings = Settings()
           runtime_settings = _collector_runtime_settings(settings, run_mode="DAILY")
           provider_runtime = resolve_ai_provider(runtime_settings)
-          checkpoint_path = Path("idx-recovery-checkpoint.json")
+          checkpoint_path = Path("idx-recovery-resume-checkpoint.json")
           checkpoint_store = FileCheckpointStore(checkpoint_path)
-          checkpoint_store.save(IdxWebsiteCheckpoint(EXISTING_IDS, None))
+          checkpoint_store.save(IdxWebsiteCheckpoint((), None))
           reports = []
           failures = []
 
@@ -185,7 +166,7 @@ jobs:
               finally:
                   idx_client.close()
 
-          Path("idx-recovery-report.json").write_text(
+          Path("idx-recovery-resume-report.json").write_text(
               json.dumps({"reports": reports, "failures": failures}, ensure_ascii=False, indent=2),
               encoding="utf-8",
           )
@@ -204,6 +185,6 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: idx-recovery-20260821-report
-          path: idx-recovery-report.json
+          name: idx-recovery-resume-20260821-report
+          path: idx-recovery-resume-report.json
           if-no-files-found: warn
