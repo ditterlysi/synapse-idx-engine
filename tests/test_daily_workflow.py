@@ -17,8 +17,12 @@ def test_daily_workflow_keeps_production_guardrails() -> None:
     assert "set -o pipefail" in workflow
     assert "synapse-idx-website daily --confirm-schedule | tee idx-daily-report.json" in workflow
     assert "cancel-in-progress: false" in workflow
-    assert "issues: write" in workflow
-    assert "gh issue create" in workflow
+    assert "contents: read" in workflow
+    assert "Annotate collector failure" in workflow
+    assert "::error title=IDX Daily Collector failed::" in workflow
+    assert "Synapse Telegram health watcher" in workflow
+    assert "issues: write" not in workflow
+    assert "gh issue create" not in workflow
 
     forbidden = ("playwright install", "proxy rotation", "captcha solving")
     lowered = workflow.lower()

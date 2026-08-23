@@ -12,7 +12,6 @@ concurrency:
 
 permissions:
   contents: read
-  issues: write
 
 jobs:
   collect:
@@ -99,12 +98,7 @@ jobs:
           summary_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
           PY
 
-      - name: Create failure alert issue
+      - name: Annotate collector failure
         if: failure()
-        env:
-          GH_TOKEN: ${{ github.token }}
         run: |
-          gh issue create \
-            --repo "$GITHUB_REPOSITORY" \
-            --title "[IDX Daily] Collector failure #${GITHUB_RUN_NUMBER}" \
-            --body "The scheduled IDX collector failed. Run: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID} Commit: ${GITHUB_SHA}. The durable checkpoint is not advanced on failed processing, so the next successful run can retry the bounded window."
+          echo "::error title=IDX Daily Collector failed::Run ${GITHUB_RUN_NUMBER} failed. Check this Actions run and its collector summary. Persisted processing failures are also picked up by the Synapse Telegram health watcher without advancing the durable checkpoint."
