@@ -3,8 +3,13 @@ from __future__ import annotations
 import json
 
 import httpx
+import pytest
 
-from idx_digest.gemini_summarizer import GeminiSummarizer, build_gemini_request
+from idx_digest.gemini_summarizer import (
+    GeminiRateLimitError,
+    GeminiSummarizer,
+    build_gemini_request,
+)
 
 
 def _openrouter_payload() -> dict[str, object]:
@@ -34,6 +39,33 @@ def _openrouter_payload() -> dict[str, object]:
     }
 
 
+def _bare_summarizer(client: httpx.Client) -> GeminiSummarizer:
+    summarizer = object.__new__(GeminiSummarizer)
+    summarizer.client = client
+    summarizer.api_model = "gemini-3.5-flash-lite"
+    summarizer.observer = None
+    return summarizer
+
+
+def _success_response() -> httpx.Response:
+    return httpx.Response(
+        200,
+        json={
+            "candidates": [
+                {
+                    "content": {"parts": [{"text": '{"summary":"ok"}'}]},
+                    "finishReason": "STOP",
+                }
+            ],
+            "usageMetadata": {
+                "promptTokenCount": 10,
+                "candidatesTokenCount": 4,
+                "totalTokenCount": 14,
+            },
+        },
+    )
+
+
 def test_build_gemini_request_uses_generate_content_structured_output() -> None:
     request = build_gemini_request(_openrouter_payload())
 
@@ -55,30 +87,13 @@ def test_gemini_response_maps_back_to_existing_summarizer_contract() -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         captured["path"] = request.url.path
         captured["body"] = json.loads(request.content.decode("utf-8"))
-        return httpx.Response(
-            200,
-            json={
-                "candidates": [
-                    {
-                        "content": {"parts": [{"text": '{"summary":"ok"}'}]},
-                        "finishReason": "STOP",
-                    }
-                ],
-                "usageMetadata": {
-                    "promptTokenCount": 10,
-                    "candidatesTokenCount": 4,
-                    "totalTokenCount": 14,
-                },
-            },
-        )
+        return _success_response()
 
     client = httpx.Client(
         base_url="https://generativelanguage.googleapis.com/v1beta/",
         transport=httpx.MockTransport(handler),
     )
-    summarizer = object.__new__(GeminiSummarizer)
-    summarizer.client = client
-    summarizer.api_model = "gemini-3.5-flash-lite"
+    summarizer = _bare_summarizer(client)
 
     content, usage = summarizer._request_non_streaming(_openrouter_payload())
 
@@ -90,4 +105,59 @@ def test_gemini_response_maps_back_to_existing_summarizer_contract() -> None:
     assert usage["completion_tokens"] == 4
     assert usage["total_tokens"] == 14
     assert usage["finish_reason"] == "STOP"
+    client.close()
+
+
+def test_gemini_429_obeys_cooldown_then_retries_once() -> None:
+    calls = 0
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            return httpx.Response(
+                429,
+                headers={"Retry-After": "0"},
+                json={"error": {"code": 429, "message": "quota exceeded"}},
+            )
+        return _success_response()
+
+    client = httpx.Client(
+        base_url="https://generativelanguage.googleapis.com/v1beta/",
+        transport=httpx.MockTransport(handler),
+    )
+    summarizer = _bare_summarizer(client)
+
+    content, _usage = summarizer._request_non_streaming(_openrouter_payload())
+
+    assert content == '{"summary":"ok"}'
+    assert calls == 2
+    assert summarizer._gemini_serialize_after_429 is True
+    client.close()
+
+
+def test_gemini_429_stops_after_one_cooldown_retry() -> None:
+    calls = 0
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        return httpx.Response(
+            429,
+            headers={"Retry-After": "0"},
+            json={"error": {"code": 429, "message": "quota exceeded"}},
+        )
+
+    client = httpx.Client(
+        base_url="https://generativelanguage.googleapis.com/v1beta/",
+        transport=httpx.MockTransport(handler),
+    )
+    summarizer = _bare_summarizer(client)
+
+    with pytest.raises(GeminiRateLimitError) as exc_info:
+        summarizer._request_non_streaming(_openrouter_payload())
+
+    assert exc_info.value.status_code == 429
+    assert calls == 2
+    assert summarizer._gemini_serialize_after_429 is True
     client.close()
