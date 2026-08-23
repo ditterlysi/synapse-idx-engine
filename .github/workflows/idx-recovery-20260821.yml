@@ -10,7 +10,7 @@ on:
 
 concurrency:
   group: idx-recovery-20260821
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 permissions:
   contents: read
