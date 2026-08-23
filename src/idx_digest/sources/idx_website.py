@@ -246,10 +246,6 @@ class IdxWebsiteSource:
                 "metadataRowsCollected": len(collected),
             }
 
-        # IDX has been observed returning an empty/duplicated page for indexFrom>0
-        # while ResultCount still advertises additional rows. Prefer one bounded
-        # wide first-page request over many offset requests when the reported day
-        # fits inside the configured maximum.
         if reported_total is not None and len(collected) < reported_total <= self.max_wide_page_size:
             probe_size = min(self.max_wide_page_size, max(self.wide_page_size, reported_total))
             probe_page, probe_total = self._fetch_metadata_page(
@@ -373,6 +369,7 @@ class IdxWebsiteSource:
         disclosures: list[SourceDisclosure] = []
         processed_ids: list[str] = []
         nonissuer_row_ids: list[str] = []
+        unsupported_ticker_row_ids: list[str] = []
         attachment_downloads = 0
         attachment_cache_hits = 0
         newest_at: datetime | None = None
@@ -383,6 +380,10 @@ class IdxWebsiteSource:
             if not ticker:
                 if len(nonissuer_row_ids) < 20:
                     nonissuer_row_ids.append(raw_id)
+                continue
+            if re.fullmatch(r"[A-Z0-9.]{1,10}", ticker) is None:
+                if len(unsupported_ticker_row_ids) < 20:
+                    unsupported_ticker_row_ids.append(raw_id)
                 continue
 
             title = str(announcement.get("JudulPengumuman") or "").strip()
@@ -425,11 +426,10 @@ class IdxWebsiteSource:
             if newest_at is None or announced_at > newest_at:
                 newest_at = announced_at
 
-        # IDX can return exchange/market announcements through the same endpoint
-        # with no issuer ticker. Those rows are outside the issuer-disclosure
-        # product scope and must not fail the whole window or poison checkpoint
-        # state. Only issuer disclosures successfully normalized by this adapter
-        # are added to seenIds.
+        # The endpoint also returns exchange/market/product rows that do not fit
+        # Synapse's issuer ticker contract. Those rows are outside this product's
+        # issuer-disclosure scope. They are reported in diagnostics, skipped
+        # without failing the whole window, and never added to checkpoint state.
         merged_seen = list(dict.fromkeys([*checkpoint.seen_ids, *processed_ids]))
         latest_value = checkpoint.latest_announced_at
         if newest_at is not None:
@@ -451,6 +451,8 @@ class IdxWebsiteSource:
             "newCandidates": len(candidates),
             "nonIssuerRowsSkipped": len(nonissuer_row_ids),
             "nonIssuerRowIds": nonissuer_row_ids,
+            "unsupportedTickerRowsSkipped": len(unsupported_ticker_row_ids),
+            "unsupportedTickerRowIds": unsupported_ticker_row_ids,
             "issuerDisclosuresProcessed": len(disclosures),
             "checkpointSeenIds": len(seen_checkpoint),
             "disclosuresNew": len(disclosures),
