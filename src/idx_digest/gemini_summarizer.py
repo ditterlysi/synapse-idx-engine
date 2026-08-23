@@ -12,7 +12,6 @@ from .observability import RunObserver
 from .summarizer import OpenRouterSummarizer
 from .summary_schemas import SummaryError
 
-
 _RETRY_IN_RE = re.compile(r"retry in\s+([0-9]+(?:\.[0-9]+)?)s", re.IGNORECASE)
 _DURATION_RE = re.compile(r"^\s*([0-9]+(?:\.[0-9]+)?)s\s*$", re.IGNORECASE)
 _DEFAULT_RATE_LIMIT_COOLDOWN_SECONDS = 60.0
