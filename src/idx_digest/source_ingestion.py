@@ -92,6 +92,7 @@ def _text_sha256(text: str) -> str:
 class SourcePublishStats:
     disclosures_available: int = 0
     disclosures_created: int = 0
+    disclosures_skipped_ready: int = 0
     attachments_staged: int = 0
     files_published: int = 0
     files_extracted: int = 0
@@ -306,6 +307,7 @@ class SourceIngestionRunner:
 
                 stats.disclosures_available = len(source_result.disclosures)
                 disclosure_ids: dict[str, str] = {}
+                disclosure_statuses: dict[str, str | None] = {}
                 local_items = list(source_result.disclosures)
                 for batch in _chunks(local_items, DISCLOSURE_BATCH_SIZE):
                     response = client.upsert_disclosures(
@@ -316,10 +318,13 @@ class SourceIngestionRunner:
                     )
                     for item in response.items:
                         disclosure_ids[item.idx_announcement_id] = item.disclosure_id
+                        disclosure_statuses[item.idx_announcement_id] = getattr(
+                            item, "processing_status", None
+                        )
                         if item.created:
                             stats.disclosures_created += 1
 
-                if local_items:
+                if any(disclosure_statuses.get(item.external_id) != "READY" for item in local_items):
                     summarizer = self.summarizer_factory(runtime_settings)
 
                 for disclosure in local_items:
@@ -329,6 +334,9 @@ class SourceIngestionRunner:
                         stats.errors.append(
                             f"{disclosure.external_id}: Synapse disclosure id missing after upsert"
                         )
+                        continue
+                    if disclosure_statuses.get(disclosure.external_id) == "READY":
+                        stats.disclosures_skipped_ready += 1
                         continue
                     try:
                         if not disclosure.attachments:

@@ -151,6 +151,7 @@ class DisclosureUpsertResult(SynapseModel):
     idx_announcement_id: str
     disclosure_id: str
     created: bool
+    processing_status: ProcessingStatus | None = None
 
 
 class DisclosureUpsertResponse(SynapseModel):
