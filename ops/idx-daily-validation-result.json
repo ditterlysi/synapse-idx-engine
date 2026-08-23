@@ -1,0 +1,59 @@
+{
+  "ok": false,
+  "runId": "2f59c9d3-22f6-4d29-b72c-fcb7b70c1c45",
+  "status": "PARTIAL",
+  "sourceId": "idx-website",
+  "sourceComplete": false,
+  "sourceDiagnostics": {
+    "adapter": "idx-website",
+    "networkAccess": true,
+    "transport": "http-only",
+    "sourceRequests": 7,
+    "pagesFetched": 1,
+    "repliesSeen": 9,
+    "reportedTotal": 9,
+    "paginationStrategy": "single-page",
+    "metadataRowsCollected": 9,
+    "metadataRowsInRequestedWindow": 9,
+    "alreadySeenInRequestedWindow": 4,
+    "newCandidates": 5,
+    "nonIssuerRowsSkipped": 2,
+    "nonIssuerRowIds": [
+      "20260822112018-TEST/B031/ubah/20260822_id-id",
+      "20260822112144-TEST/B031/keluar/20260822_id-id"
+    ],
+    "unsupportedTickerRowsSkipped": 0,
+    "unsupportedTickerRowIds": [],
+    "nonStockProductRowsSkipped": 0,
+    "nonStockProductRowIds": [],
+    "unavailableAttachmentRowsSkipped": 2,
+    "unavailableAttachmentRowIds": [
+      "20260823091540-082/S/01/COS-ATPI/VIII/2026_id-id",
+      "20260823095220-06.61/LBC/VIII/2026_id-id"
+    ],
+    "issuerDisclosuresProcessed": 1,
+    "checkpointSeenIds": 149,
+    "disclosuresNew": 1,
+    "attachmentDownloads": 4,
+    "attachmentCacheHits": 0,
+    "downloadedBytes": 1700262,
+    "authoritativeCoverageAllowed": false
+  },
+  "publish": {
+    "disclosuresAvailable": 1,
+    "disclosuresCreated": 1,
+    "disclosuresSkippedReady": 0,
+    "attachmentsStaged": 2,
+    "filesPublished": 0,
+    "filesExtracted": 2,
+    "documentsAnalyzed": 1,
+    "analysesCompleted": 0,
+    "partialDisclosures": 1,
+    "errors": [
+      "idx-web-20260823092742-140/S/01/PD-ATPI/VIII/2026_id-id: Gemini rate limited (429) after cooldown; retry later: {\n  \"error\": {\n    \"code\": 429,\n    \"message\": \"You exceeded your current quota, please check your plan and billing details. For more information on this error, head to: https://ai.google.dev/gemini-api/docs/rate-limits. To monitor your current usage, head to: https://ai.dev/rate-limit. \\n* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_requests, limit: 500, model: gemini-3.5-flash-lite\\nPlease retry in 849.302943ms.\",\n    \"status\": \"RESOURCE_EXHAUSTED\",\n    \"details\": [\n      {\n        \"@type\": \"type.googleapis.com/google.rpc.Help\",\n        \"links\": [\n          {\n            \"description\": \"Lear…"
+    ]
+  },
+  "checkpointSeedCount": 149,
+  "checkpointCommittedLocal": false,
+  "durableCheckpointWritten": false
+}
