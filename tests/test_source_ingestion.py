@@ -205,12 +205,12 @@ def _window(tmp_path, *, source_url: str | None = None, complete: bool = False) 
     )
 
 
-def _runner(settings, source, *, allow_coverage_commit=False):
+def _runner(settings, source, *, allow_coverage_commit=False, summarizer_factory=FakeSummarizer):
     return SourceIngestionRunner(
         settings,
         source,
         client_factory=FakeClient,
-        summarizer_factory=FakeSummarizer,
+        summarizer_factory=summarizer_factory,
         extractor=_extractor,
         allow_coverage_commit=allow_coverage_commit,
         require_external_id_prefix="manual-",
@@ -340,3 +340,64 @@ def test_manual_external_id_namespace_is_enforced(tmp_path) -> None:
     assert client is not None
     assert client.final_run_status == "FAILED"
     assert client.final_error_code == "SOURCE_RUN_FAILED"
+
+
+class FakeRateLimitError(ValueError):
+    status_code = 429
+
+
+class FakeRateLimitSummarizer(FakeSummarizer):
+    announcement_calls = 0
+
+    def summarize_announcement(self, *, announcement, documents, stream=False):
+        type(self).announcement_calls += 1
+        raise FakeRateLimitError("Gemini rate limited after provider cooldown")
+
+
+def test_ai_rate_limit_trips_run_circuit_breaker(tmp_path) -> None:
+    settings = _settings(tmp_path)
+    base = _window(tmp_path)
+    second_path = tmp_path / "disclosure-2.txt"
+    second_path.write_text("Second synthetic disclosure body", encoding="utf-8")
+    second = SourceDisclosure(
+        external_id="manual-example-2",
+        ticker="BMRI",
+        announced_at=datetime.fromisoformat("2026-08-21T10:30:00+07:00"),
+        title="Second disclosure",
+        source_url="https://example.com/disclosures/manual-example-2",
+        attachments=(
+            SourceAttachment(
+                filename="disclosure-2.txt",
+                local_path=second_path,
+                content_type="text/plain",
+            ),
+        ),
+    )
+    result_window = SourceWindowResult(
+        source_id=base.source_id,
+        requested_start=base.requested_start,
+        requested_end=base.requested_end,
+        disclosures=(base.disclosures[0], second),
+        diagnostics=base.diagnostics,
+    )
+    source = FakeSource(result_window)
+    FakeRateLimitSummarizer.announcement_calls = 0
+
+    result = _runner(
+        settings,
+        source,
+        summarizer_factory=FakeRateLimitSummarizer,
+    ).run_window(
+        start_at=source.result.requested_start,
+        end_at=source.result.requested_end,
+    )
+    client = FakeClient.latest
+    assert client is not None
+
+    assert result.processing_ok is False
+    assert result.publish.partial_disclosures == 2
+    assert result.publish.ai_rate_limit_deferred == 1
+    assert result.publish.files_extracted == 1
+    assert FakeRateLimitSummarizer.announcement_calls == 1
+    assert client.final_run_status == "PARTIAL"
+    assert client.final_error_code == "AI_RATE_LIMITED"

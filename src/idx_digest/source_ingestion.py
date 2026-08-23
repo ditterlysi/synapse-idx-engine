@@ -53,6 +53,10 @@ def _truncate(value: str, limit: int) -> str:
     return value if len(value) <= limit else value[: limit - 1] + "…"
 
 
+def _is_ai_rate_limit_error(error: Exception) -> bool:
+    return getattr(error, "status_code", None) == 429
+
+
 def _chunks(values: list[Any], size: int):
     for index in range(0, len(values), size):
         yield values[index : index + size]
@@ -99,6 +103,7 @@ class SourcePublishStats:
     documents_analyzed: int = 0
     analyses_completed: int = 0
     partial_disclosures: int = 0
+    ai_rate_limit_deferred: int = 0
     errors: list[str] = field(default_factory=list)
 
 
@@ -327,6 +332,7 @@ class SourceIngestionRunner:
                 if any(disclosure_statuses.get(item.external_id) != "READY" for item in local_items):
                     summarizer = self.summarizer_factory(runtime_settings)
 
+                ai_rate_limited = False
                 for disclosure in local_items:
                     disclosure_id = disclosure_ids.get(disclosure.external_id)
                     if not disclosure_id:
@@ -337,6 +343,23 @@ class SourceIngestionRunner:
                         continue
                     if disclosure_statuses.get(disclosure.external_id) == "READY":
                         stats.disclosures_skipped_ready += 1
+                        continue
+                    if ai_rate_limited:
+                        stats.partial_disclosures += 1
+                        stats.ai_rate_limit_deferred += 1
+                        stats.errors.append(
+                            f"{disclosure.external_id}: AI_RATE_LIMITED: deferred after earlier provider 429"
+                        )
+                        try:
+                            client.update_processing_status(
+                                disclosure_id,
+                                UpdateProcessingStatusRequest(processing_status="PARTIAL"),
+                            )
+                        except Exception as status_exc:
+                            stats.errors.append(
+                                f"{disclosure.external_id}: could not mark PARTIAL: "
+                                f"{_truncate(str(status_exc), 400)}"
+                            )
                         continue
                     try:
                         if not disclosure.attachments:
@@ -398,6 +421,8 @@ class SourceIngestionRunner:
                         client.commit_analysis(disclosure_id, request)
                         stats.analyses_completed += 1
                     except Exception as exc:
+                        if _is_ai_rate_limit_error(exc):
+                            ai_rate_limited = True
                         stats.partial_disclosures += 1
                         stats.errors.append(
                             f"{disclosure.external_id}: {_truncate(str(exc) or type(exc).__name__, 700)}"
@@ -422,7 +447,7 @@ class SourceIngestionRunner:
                 error_message = None
                 if not complete:
                     if not processing_ok:
-                        error_code = "SOURCE_PROCESSING_PARTIAL"
+                        error_code = "AI_RATE_LIMITED" if ai_rate_limited else "SOURCE_PROCESSING_PARTIAL"
                         error_message = _truncate("; ".join(stats.errors[:4]), 1000)
                     elif not source_complete:
                         error_code = "SOURCE_COVERAGE_UNPROVEN"
