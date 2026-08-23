@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 import httpx
 import pytest
 
 from idx_digest.idx_polite_http import (
     IdxAccessProtectionError,
+    IdxResourceNotFoundError,
     PoliteFetchClient,
 )
 
@@ -83,3 +86,21 @@ def test_polite_client_stops_on_html_access_challenge():
     with _client(handler) as client:
         with pytest.raises(IdxAccessProtectionError, match="challenge"):
             client.get_json("/primary/ListedCompany/GetAnnouncement", params={})
+
+
+def test_polite_client_maps_404_to_resource_not_found():
+    calls = 0
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        return httpx.Response(404, request=request)
+
+    with _client(handler) as client:
+        with pytest.raises(IdxResourceNotFoundError, match="404"):
+            client.download(
+                "https://www.idx.id/StaticData/NewsAndAnnouncement/missing.pdf",
+                Path("unused.pdf"),
+            )
+
+    assert calls == 1

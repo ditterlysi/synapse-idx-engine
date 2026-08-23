@@ -26,6 +26,10 @@ class IdxUnexpectedResponseError(IdxPoliteHttpError):
     """Raised when the public endpoint no longer matches the expected response shape."""
 
 
+class IdxResourceNotFoundError(IdxPoliteHttpError):
+    """Raised when an official IDX resource referenced by metadata returns HTTP 404."""
+
+
 class PoliteFetchClient:
     """Small HTTP-only client for the public IDX disclosure endpoint.
 
@@ -144,6 +148,8 @@ class PoliteFetchClient:
                 raise IdxAccessProtectionError(f"IDX returned HTTP 429; collector stopped{detail}")
             if status in {401, 407}:
                 raise IdxAccessProtectionError(f"IDX access protection returned HTTP {status}; collector stopped")
+            if status == 404:
+                raise IdxResourceNotFoundError("IDX resource returned HTTP 404")
             if status >= 500:
                 if attempt >= self.max_retries:
                     raise IdxPoliteHttpError(f"IDX returned HTTP {status} after {attempt + 1} attempt(s)")
