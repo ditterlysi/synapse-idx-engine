@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import re
+import threading
+import time
 from typing import Any
 
 import httpx
@@ -8,6 +11,26 @@ from .config import Settings
 from .observability import RunObserver
 from .summarizer import OpenRouterSummarizer
 from .summary_schemas import SummaryError
+
+
+_RETRY_IN_RE = re.compile(r"retry in\s+([0-9]+(?:\.[0-9]+)?)s", re.IGNORECASE)
+_DURATION_RE = re.compile(r"^\s*([0-9]+(?:\.[0-9]+)?)s\s*$", re.IGNORECASE)
+_DEFAULT_RATE_LIMIT_COOLDOWN_SECONDS = 60.0
+_MAX_RATE_LIMIT_COOLDOWN_SECONDS = 120.0
+
+
+class GeminiRateLimitError(ValueError):
+    """Terminal Gemini 429 after one provider-directed cooldown retry.
+
+    ValueError is intentional: the inherited structured-output retry loop retries
+    SummaryError/JSON failures, but a second 429 should stop this disclosure and
+    let a later ingestion pass resume it instead of hammering the same quota.
+    """
+
+    def __init__(self, message: str, *, retry_after_seconds: float) -> None:
+        super().__init__(message)
+        self.status_code = 429
+        self.retry_after_seconds = retry_after_seconds
 
 
 def _message_text(content: Any) -> str:
@@ -74,13 +97,63 @@ def build_gemini_request(openrouter_payload: dict[str, Any]) -> dict[str, Any]:
     return request
 
 
+def _bounded_retry_seconds(value: float | None) -> float | None:
+    if value is None:
+        return None
+    return min(max(float(value), 0.0), _MAX_RATE_LIMIT_COOLDOWN_SECONDS)
+
+
+def _retry_after_seconds(response: httpx.Response) -> float:
+    """Resolve Gemini's requested cooldown from headers/body with a safe fallback."""
+
+    header = response.headers.get("Retry-After")
+    if header:
+        try:
+            parsed = _bounded_retry_seconds(float(header.strip()))
+        except ValueError:
+            parsed = None
+        if parsed is not None:
+            return parsed
+
+    try:
+        body = response.json()
+    except Exception:
+        body = None
+    if isinstance(body, dict):
+        error = body.get("error")
+        details = error.get("details") if isinstance(error, dict) else None
+        if isinstance(details, list):
+            for detail in details:
+                if not isinstance(detail, dict):
+                    continue
+                if not str(detail.get("@type") or "").endswith("RetryInfo"):
+                    continue
+                raw_delay = str(detail.get("retryDelay") or "")
+                match = _DURATION_RE.match(raw_delay)
+                if match:
+                    parsed = _bounded_retry_seconds(float(match.group(1)))
+                    if parsed is not None:
+                        return parsed
+
+    match = _RETRY_IN_RE.search(response.text or "")
+    if match:
+        parsed = _bounded_retry_seconds(float(match.group(1)))
+        if parsed is not None:
+            return parsed
+    return _DEFAULT_RATE_LIMIT_COOLDOWN_SECONDS
+
+
 class GeminiSummarizer(OpenRouterSummarizer):
     """Direct Gemini Developer API transport with inherited Synapse validation.
 
     OpenRouterSummarizer remains available for compatibility. We reuse its prompt
-    rendering, retry policy, audit persistence, concurrency gates, and strict
-    post-response schema validation, while translating only the HTTP request and
-    response shapes for Gemini's GenerateContent API.
+    rendering, audit persistence, concurrency gates, and strict post-response
+    schema validation while translating the HTTP request/response shapes.
+
+    After the first HTTP 429 in a run, Gemini requests are serialized and share a
+    provider-directed cooldown. A disclosure gets one cooldown retry. If Gemini
+    still returns 429, processing stops for that disclosure so a later run can
+    resume it without repeatedly burning quota in the same window.
     """
 
     def __init__(
@@ -123,13 +196,85 @@ class GeminiSummarizer(OpenRouterSummarizer):
         self._owns_client = client is None
         self.api_model = model
         self.model = f"{model}@google-gemini"
+        self._gemini_rate_limit_lock = threading.RLock()
+        self._gemini_rate_limit_serial = threading.Lock()
+        self._gemini_rate_limit_until = 0.0
+        self._gemini_serialize_after_429 = False
 
-    def _request_non_streaming(self, payload: dict[str, Any]) -> tuple[Any, dict[str, Any]]:
-        request = build_gemini_request(payload)
-        response = self.client.post(
+    def _ensure_rate_limit_state(self) -> None:
+        # Some focused unit tests instantiate the adapter with object.__new__.
+        if not hasattr(self, "_gemini_rate_limit_lock"):
+            self._gemini_rate_limit_lock = threading.RLock()
+            self._gemini_rate_limit_serial = threading.Lock()
+            self._gemini_rate_limit_until = 0.0
+            self._gemini_serialize_after_429 = False
+
+    def _activate_rate_limit_cooldown(self, seconds: float) -> None:
+        self._ensure_rate_limit_state()
+        delay = _bounded_retry_seconds(seconds)
+        if delay is None:
+            delay = _DEFAULT_RATE_LIMIT_COOLDOWN_SECONDS
+        with self._gemini_rate_limit_lock:
+            self._gemini_serialize_after_429 = True
+            self._gemini_rate_limit_until = max(
+                self._gemini_rate_limit_until,
+                time.monotonic() + delay,
+            )
+        observer = getattr(self, "observer", None)
+        if observer:
+            observer.event(
+                "llm",
+                "Gemini 429 cooldown activated",
+                level="WARNING",
+                always=True,
+                provider="google-gemini",
+                model=self.api_model,
+                retry_after_seconds=f"{delay:.2f}",
+                serialized_after_rate_limit=True,
+            )
+
+    def _wait_for_rate_limit_cooldown(self) -> None:
+        self._ensure_rate_limit_state()
+        with self._gemini_rate_limit_lock:
+            remaining = max(0.0, self._gemini_rate_limit_until - time.monotonic())
+        if remaining > 0:
+            time.sleep(remaining)
+
+    def _post_generate_content(self, request: dict[str, Any]) -> httpx.Response:
+        self._ensure_rate_limit_state()
+        with self._gemini_rate_limit_lock:
+            serialize = self._gemini_serialize_after_429
+        if serialize:
+            with self._gemini_rate_limit_serial:
+                self._wait_for_rate_limit_cooldown()
+                return self.client.post(
+                    f"models/{self.api_model}:generateContent",
+                    json=request,
+                )
+        self._wait_for_rate_limit_cooldown()
+        return self.client.post(
             f"models/{self.api_model}:generateContent",
             json=request,
         )
+
+    def _request_non_streaming(self, payload: dict[str, Any]) -> tuple[Any, dict[str, Any]]:
+        request = build_gemini_request(payload)
+        response: httpx.Response | None = None
+        for attempt in range(2):
+            response = self._post_generate_content(request)
+            if response.status_code != 429:
+                break
+            retry_after = _retry_after_seconds(response)
+            self._activate_rate_limit_cooldown(retry_after)
+            if attempt == 0:
+                continue
+            raise GeminiRateLimitError(
+                f"Gemini rate limited (429) after cooldown; retry later: {response.text[:1000]}",
+                retry_after_seconds=retry_after,
+            )
+
+        if response is None:
+            raise SummaryError("Gemini request was not sent")
         if response.is_error:
             raise SummaryError(
                 f"Gemini request failed ({response.status_code}): {response.text[:1000]}"
