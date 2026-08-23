@@ -1,0 +1,64 @@
+name: IDX Daily Validation 2026-08-24
+
+on:
+  push:
+    branches:
+      - ops/idx-daily-validation-20260824
+    paths:
+      - ops/idx-daily-validation-trigger.txt
+
+permissions:
+  contents: write
+
+concurrency:
+  group: idx-daily-validation-20260824
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 50
+    env:
+      AI_PROVIDER: gemini
+      GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+      SYNAPSE_INTERNAL_BASE_URL: ${{ secrets.SYNAPSE_INTERNAL_BASE_URL }}
+      SYNAPSE_INGESTION_SECRET: ${{ secrets.SYNAPSE_INGESTION_SECRET }}
+      SYNAPSE_DAILY_ENABLED: "true"
+      APP_TIMEZONE: Asia/Jakarta
+      SYNAPSE_DAILY_TRANSPORT: http
+      SYNAPSE_DAILY_ALLOW_HISTORICAL_BACKFILL: "false"
+      SYNAPSE_DAILY_ALLOW_TICKER_FANOUT: "false"
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ops/idx-daily-validation-20260824
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install OCR dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y tesseract-ocr tesseract-ocr-eng tesseract-ocr-ind
+
+      - name: Install engine
+        run: python -m pip install -e .
+
+      - name: Run exact failed-window validation
+        run: python ops/idx_daily_validation_20260824.py
+
+      - name: Commit validation report
+        if: always()
+        run: |
+          if [ -f ops/idx-daily-validation-result.json ]; then
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git add ops/idx-daily-validation-result.json
+            git diff --cached --quiet || git commit -m "Record IDX daily validation result"
+            git push origin HEAD:ops/idx-daily-validation-20260824
+          fi
