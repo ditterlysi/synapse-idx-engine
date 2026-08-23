@@ -1,0 +1,45 @@
+name: IDX Reconcile Missing 2026-08-21
+
+on:
+  push:
+    branches:
+      - ops/idx-reconcile-missing-20260821
+    paths:
+      - ops/idx-reconcile-trigger.txt
+
+permissions:
+  contents: write
+
+concurrency:
+  group: idx-reconcile-missing-20260821
+  cancel-in-progress: false
+
+jobs:
+  reconcile:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ops/idx-reconcile-missing-20260821
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install engine
+        run: python -m pip install -e .
+
+      - name: Read IDX metadata only
+        run: python ops/idx_reconcile_missing_20260821.py > ops/idx-reconcile-result.json
+
+      - name: Commit diagnostic result
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add ops/idx-reconcile-result.json
+          git diff --cached --quiet || git commit -m "Record IDX missing-ID reconciliation"
+          git push origin HEAD:ops/idx-reconcile-missing-20260821
