@@ -12,7 +12,12 @@ from zoneinfo import ZoneInfo
 
 from dateutil.parser import isoparse
 
-from ..idx_polite_http import CURRENT_IDX_BASE_URL, OFFICIAL_IDX_HOSTS, PoliteFetchClient
+from ..idx_polite_http import (
+    CURRENT_IDX_BASE_URL,
+    OFFICIAL_IDX_HOSTS,
+    IdxResourceNotFoundError,
+    PoliteFetchClient,
+)
 from ..source_contract import SourceAttachment, SourceContractError, SourceDisclosure, SourceWindowResult
 
 IDX_WEBSITE_SOURCE_ID = "idx-website"
@@ -21,6 +26,13 @@ IDX_ANNOUNCEMENT_ENDPOINT = "/primary/ListedCompany/GetAnnouncement"
 IDX_DISCLOSURE_PAGE = f"{CURRENT_IDX_BASE_URL}/id/perusahaan-tercatat/keterbukaan-informasi"
 CHECKPOINT_SCHEMA = "synapse-idx-website-checkpoint-v1"
 MAX_WINDOW = timedelta(hours=48)
+NON_STOCK_PRODUCT_FLAGS = (
+    "EfekEmiten_ETF",
+    "EfekEmiten_DIRE",
+    "EfekEmiten_DINFRA",
+    "EfekEmiten_EBA",
+    "EfekEmiten_SPEI",
+)
 
 
 class IdxWebsiteSourceError(SourceContractError):
@@ -370,6 +382,8 @@ class IdxWebsiteSource:
         processed_ids: list[str] = []
         nonissuer_row_ids: list[str] = []
         unsupported_ticker_row_ids: list[str] = []
+        nonstock_product_row_ids: list[str] = []
+        unavailable_attachment_row_ids: list[str] = []
         attachment_downloads = 0
         attachment_cache_hits = 0
         newest_at: datetime | None = None
@@ -385,6 +399,10 @@ class IdxWebsiteSource:
                 if len(unsupported_ticker_row_ids) < 20:
                     unsupported_ticker_row_ids.append(raw_id)
                 continue
+            if any(bool(announcement.get(flag)) for flag in NON_STOCK_PRODUCT_FLAGS):
+                if len(nonstock_product_row_ids) < 20:
+                    nonstock_product_row_ids.append(raw_id)
+                continue
 
             title = str(announcement.get("JudulPengumuman") or "").strip()
             if not title:
@@ -394,15 +412,25 @@ class IdxWebsiteSource:
             if not isinstance(attachments_raw, list):
                 raise IdxWebsiteSourceError(f"IDX announcement {raw_id!r} attachments must be a list")
             attachments: list[SourceAttachment] = []
+            attachment_unavailable = False
             for attachment_raw in attachments_raw:
                 if not isinstance(attachment_raw, dict) or not attachment_raw.get("FullSavePath"):
                     continue
-                attachment, cache_hit = self._stage_attachment(attachment_raw)
+                try:
+                    attachment, cache_hit = self._stage_attachment(attachment_raw)
+                except IdxResourceNotFoundError:
+                    attachment_unavailable = True
+                    break
                 attachments.append(attachment)
                 if cache_hit:
                     attachment_cache_hits += 1
                 else:
                     attachment_downloads += 1
+
+            if attachment_unavailable:
+                if len(unavailable_attachment_row_ids) < 20:
+                    unavailable_attachment_row_ids.append(raw_id)
+                continue
 
             disclosures.append(
                 SourceDisclosure(
@@ -453,6 +481,10 @@ class IdxWebsiteSource:
             "nonIssuerRowIds": nonissuer_row_ids,
             "unsupportedTickerRowsSkipped": len(unsupported_ticker_row_ids),
             "unsupportedTickerRowIds": unsupported_ticker_row_ids,
+            "nonStockProductRowsSkipped": len(nonstock_product_row_ids),
+            "nonStockProductRowIds": nonstock_product_row_ids,
+            "unavailableAttachmentRowsSkipped": len(unavailable_attachment_row_ids),
+            "unavailableAttachmentRowIds": unavailable_attachment_row_ids,
             "issuerDisclosuresProcessed": len(disclosures),
             "checkpointSeenIds": len(seen_checkpoint),
             "disclosuresNew": len(disclosures),

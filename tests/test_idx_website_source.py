@@ -7,6 +7,7 @@ from zoneinfo import ZoneInfo
 
 import pytest
 
+from idx_digest.idx_polite_http import IdxResourceNotFoundError
 from idx_digest.sources.idx_website import FileCheckpointStore, IdxWebsiteSource, IdxWebsiteSourceError
 
 
@@ -275,3 +276,95 @@ def test_source_still_fails_closed_when_issuer_title_is_missing(tmp_path):
             start_at=datetime(2026, 8, 22, 19, 0, tzinfo=JAKARTA),
             end_at=datetime(2026, 8, 22, 21, 0, tzinfo=JAKARTA),
         )
+
+
+def test_source_skips_issuer_with_404_attachment_without_checkpointing_it(tmp_path):
+    checkpoint_path = tmp_path / "checkpoint.json"
+    payload = _payload()
+    broken_id = payload["Replies"][0]["pengumuman"]["Id2"]
+    payload["Replies"][0]["attachments"][0]["FullSavePath"] = (
+        "https://www.idx.co.id/StaticData/NewsAndAnnouncement/missing.pdf"
+    )
+
+    valid = json.loads(json.dumps(payload["Replies"][0]))
+    valid_id = "20260822202000-TEST-BMRI_id-id"
+    valid["pengumuman"]["Id2"] = valid_id
+    valid["pengumuman"]["TglPengumuman"] = "2026-08-22T20:20:00"
+    valid["pengumuman"]["Kode_Emiten"] = "BMRI"
+    valid["pengumuman"]["JudulPengumuman"] = "Second valid issuer fixture"
+    valid["attachments"][0]["FullSavePath"] = (
+        "https://www.idx.co.id/StaticData/NewsAndAnnouncement/valid.pdf"
+    )
+    payload["ResultCount"] = 2
+    payload["Replies"].append(valid)
+
+    class SelectiveMissingClient(FakePoliteClient):
+        def download(self, url: str, destination: Path) -> int:
+            if url.endswith("/missing.pdf"):
+                self.request_count += 1
+                self.download_calls.append(url)
+                raise IdxResourceNotFoundError("IDX resource returned HTTP 404")
+            return super().download(url, destination)
+
+    client = SelectiveMissingClient(payload)
+    source = IdxWebsiteSource(
+        client,
+        checkpoint_store=FileCheckpointStore(checkpoint_path),
+        staging_dir=tmp_path / "cache",
+    )
+
+    result = source.collect_window(
+        start_at=datetime(2026, 8, 22, 19, 0, tzinfo=JAKARTA),
+        end_at=datetime(2026, 8, 22, 21, 0, tzinfo=JAKARTA),
+    )
+
+    assert [item.ticker for item in result.disclosures] == ["BMRI"]
+    assert result.diagnostics["unavailableAttachmentRowsSkipped"] == 1
+    assert result.diagnostics["unavailableAttachmentRowIds"] == [broken_id]
+    assert result.diagnostics["issuerDisclosuresProcessed"] == 1
+
+    source.commit_checkpoint()
+    checkpoint = json.loads(checkpoint_path.read_text(encoding="utf-8"))
+    assert valid_id in checkpoint["seenIds"]
+    assert broken_id not in checkpoint["seenIds"]
+
+
+def test_source_skips_valid_format_etf_ticker_without_checkpointing_it(tmp_path):
+    checkpoint_path = tmp_path / "checkpoint.json"
+    payload = _payload()
+    etf_id = "20260821175507-1684/MAJORIS/VIII/2026_id-id"
+    payload["ResultCount"] = 2
+    payload["Replies"] = [
+        {
+            "pengumuman": {
+                "Id2": etf_id,
+                "NoPengumuman": "1684/MAJORIS/VIII/2026",
+                "TglPengumuman": "2026-08-22T20:10:00",
+                "JudulPengumuman": "Laporan Harian atas Nilai Aktiva Bersih dan Komposisi Portofolio",
+                "Kode_Emiten": "XMIG",
+                "EfekEmiten_ETF": True,
+            },
+            "attachments": [],
+        },
+        *payload["Replies"],
+    ]
+    client = FakePoliteClient(payload)
+    source = IdxWebsiteSource(
+        client,
+        checkpoint_store=FileCheckpointStore(checkpoint_path),
+        staging_dir=tmp_path / "cache",
+    )
+
+    result = source.collect_window(
+        start_at=datetime(2026, 8, 22, 19, 0, tzinfo=JAKARTA),
+        end_at=datetime(2026, 8, 22, 21, 0, tzinfo=JAKARTA),
+    )
+
+    assert [item.ticker for item in result.disclosures] == ["BBRI"]
+    assert result.diagnostics["nonStockProductRowsSkipped"] == 1
+    assert result.diagnostics["nonStockProductRowIds"] == [etf_id]
+
+    source.commit_checkpoint()
+    checkpoint = json.loads(checkpoint_path.read_text(encoding="utf-8"))
+    assert checkpoint["seenIds"] == ["20260822201500-TEST-BBRI_id-id"]
+    assert etf_id not in checkpoint["seenIds"]
