@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from datetime import datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -91,10 +92,16 @@ def test_source_stages_new_disclosure_and_commits_checkpoint_explicitly(tmp_path
     assert disclosure.attachments[0].local_path.exists()
     assert result.diagnostics["sourceRequests"] == 2
     assert result.diagnostics["attachmentDownloads"] == 1
+    assert result.diagnostics["metadataRowsCollected"] == 1
+    assert result.diagnostics["metadataRowsInRequestedWindow"] == 1
+    assert result.diagnostics["alreadySeenInRequestedWindow"] == 0
+    assert result.diagnostics["newCandidates"] == 1
     assert checkpoint_path.exists() is False
 
     source.commit_checkpoint()
     assert checkpoint_path.exists() is True
+    checkpoint = json.loads(checkpoint_path.read_text(encoding="utf-8"))
+    assert checkpoint["seenIds"] == ["20260822201500-TEST-BBRI_id-id"]
 
 
 def test_checkpoint_skips_already_seen_disclosure_and_avoids_redownload(tmp_path):
@@ -125,14 +132,18 @@ def test_checkpoint_skips_already_seen_disclosure_and_avoids_redownload(tmp_path
     assert result.disclosures == ()
     assert second_client.download_calls == []
     assert result.diagnostics["sourceRequests"] == 1
+    assert result.diagnostics["metadataRowsInRequestedWindow"] == 1
+    assert result.diagnostics["alreadySeenInRequestedWindow"] == 1
+    assert result.diagnostics["newCandidates"] == 0
     assert result.diagnostics["disclosuresNew"] == 0
 
 
-def test_source_filters_records_outside_exact_requested_time(tmp_path):
+def test_source_filters_records_outside_exact_requested_time_without_checkpointing_them(tmp_path):
+    checkpoint_path = tmp_path / "checkpoint.json"
     client = FakePoliteClient(_payload())
     source = IdxWebsiteSource(
         client,
-        checkpoint_store=FileCheckpointStore(tmp_path / "checkpoint.json"),
+        checkpoint_store=FileCheckpointStore(checkpoint_path),
         staging_dir=tmp_path / "cache",
     )
 
@@ -143,3 +154,12 @@ def test_source_filters_records_outside_exact_requested_time(tmp_path):
 
     assert result.disclosures == ()
     assert client.download_calls == []
+    assert result.diagnostics["metadataRowsCollected"] == 1
+    assert result.diagnostics["metadataRowsInRequestedWindow"] == 0
+    assert result.diagnostics["alreadySeenInRequestedWindow"] == 0
+    assert result.diagnostics["newCandidates"] == 0
+
+    source.commit_checkpoint()
+    checkpoint = json.loads(checkpoint_path.read_text(encoding="utf-8"))
+    assert checkpoint["seenIds"] == []
+    assert checkpoint["latestAnnouncedAt"] is None
