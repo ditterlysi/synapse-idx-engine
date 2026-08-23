@@ -26,6 +26,14 @@ TARGET_IDS = {
 }
 
 
+def _scalar_metadata(value: dict[str, object]) -> dict[str, object]:
+    return {
+        key: item
+        for key, item in value.items()
+        if item is None or isinstance(item, (str, int, float, bool))
+    }
+
+
 def main() -> None:
     settings = Settings()
     timezone = ZoneInfo("Asia/Jakarta")
@@ -60,6 +68,12 @@ def main() -> None:
                 continue
             ticker = str(announcement.get("Kode_Emiten") or "").strip().upper()
             title = str(announcement.get("JudulPengumuman") or "").strip()
+            top_level = {
+                key: value
+                for key, value in item.items()
+                if key not in {"pengumuman", "attachments"}
+                and (value is None or isinstance(value, (str, int, float, bool)))
+            }
             found[raw_id] = {
                 "ticker": ticker or None,
                 "title": title or None,
@@ -72,6 +86,8 @@ def main() -> None:
                     if not (1 <= len(ticker) <= 10 and all(ch.isalnum() or ch == "." for ch in ticker))
                     else "VALID_ISSUER_TICKER"
                 ),
+                "announcementMetadata": _scalar_metadata(announcement),
+                "topLevelMetadata": top_level,
             }
         report = {
             "metadataOnly": True,
