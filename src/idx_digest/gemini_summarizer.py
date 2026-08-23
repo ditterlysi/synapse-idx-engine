@@ -3,7 +3,7 @@ from __future__ import annotations
 import re
 import threading
 import time
-from typing import Any
+import typing
 
 import httpx
 
@@ -33,7 +33,7 @@ class GeminiRateLimitError(ValueError):
         self.retry_after_seconds = retry_after_seconds
 
 
-def _message_text(content: Any) -> str:
+def _message_text(content: typing.Any) -> str:
     if isinstance(content, str):
         return content
     if isinstance(content, list):
@@ -49,7 +49,7 @@ def _message_text(content: Any) -> str:
     return "" if content is None else str(content)
 
 
-def build_gemini_request(openrouter_payload: dict[str, Any]) -> dict[str, Any]:
+def build_gemini_request(openrouter_payload: dict[str, typing.Any]) -> dict[str, typing.Any]:
     """Translate the engine's internal structured-completion request to Gemini REST.
 
     The existing summarizer owns prompt rendering, retries, auditing, and local
@@ -77,7 +77,7 @@ def build_gemini_request(openrouter_payload: dict[str, Any]) -> dict[str, Any]:
         raise SummaryError("Gemini adapter requires a JSON schema")
 
     max_tokens = int(openrouter_payload.get("max_tokens") or 4000)
-    request: dict[str, Any] = {
+    request: dict[str, typing.Any] = {
         "contents": [
             {
                 "role": "user",
@@ -240,7 +240,7 @@ class GeminiSummarizer(OpenRouterSummarizer):
         if remaining > 0:
             time.sleep(remaining)
 
-    def _post_generate_content(self, request: dict[str, Any]) -> httpx.Response:
+    def _post_generate_content(self, request: dict[str, typing.Any]) -> httpx.Response:
         self._ensure_rate_limit_state()
         with self._gemini_rate_limit_lock:
             serialize = self._gemini_serialize_after_429
@@ -257,7 +257,9 @@ class GeminiSummarizer(OpenRouterSummarizer):
             json=request,
         )
 
-    def _request_non_streaming(self, payload: dict[str, Any]) -> tuple[Any, dict[str, Any]]:
+    def _request_non_streaming(
+        self, payload: dict[str, typing.Any]
+    ) -> tuple[typing.Any, dict[str, typing.Any]]:
         request = build_gemini_request(payload)
         response: httpx.Response | None = None
         for attempt in range(2):
@@ -312,12 +314,12 @@ class GeminiSummarizer(OpenRouterSummarizer):
 
     def _request_streaming(
         self,
-        payload: dict[str, Any],
+        payload: dict[str, typing.Any],
         *,
         stream_label: str,
         request_id: str | None = None,
-        audit_context: dict[str, Any] | None = None,
-    ) -> tuple[str, dict[str, Any]]:
+        audit_context: dict[str, typing.Any] | None = None,
+    ) -> tuple[str, dict[str, typing.Any]]:
         # Source-neutral Synapse ingestion does not require token streaming. One
         # GenerateContent call preserves the same validation/audit path.
         content, usage = self._request_non_streaming(payload)
