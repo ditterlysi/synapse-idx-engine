@@ -1,0 +1,98 @@
+{
+  "metadataOnly": true,
+  "idxWrites": false,
+  "aiCalls": false,
+  "sourceRequests": 2,
+  "pagination": {
+    "pagesFetched": 2,
+    "reportedTotal": 159,
+    "paginationStrategy": "wide-page-probe",
+    "widePageProbeSize": 200,
+    "metadataRowsCollected": 159
+  },
+  "targetCount": 13,
+  "foundCount": 11,
+  "missingFromMetadata": [
+    "20260821215318-BXS/0/021/003/2026_id-id",
+    "20260821224527-BXS/08/021/007/2026_id-id"
+  ],
+  "items": {
+    "20260821115009-451/SIMASFIN-DIR/VIII/2026_id-id": {
+      "ticker": "SMMF",
+      "title": "Perubahan anggota Direksi dan/atau anggota Dewan Komisaris",
+      "announcedAt": "2026-08-21T11:50:09",
+      "attachmentCount": 4,
+      "classification": "VALID_ISSUER_TICKER"
+    },
+    "20260821115044-452/SIMASFIN-DIR/VIII/2026_id-id": {
+      "ticker": "SMMF",
+      "title": "Perubahan Pengurus",
+      "announcedAt": "2026-08-21T11:50:44",
+      "attachmentCount": 4,
+      "classification": "VALID_ISSUER_TICKER"
+    },
+    "20260821121255-081/CS-OJK/PTI/VIII/26_id-id": {
+      "ticker": "PRTL",
+      "title": "Penyampaian Bukti Iklan Informasi Penawaran Tender (Tender Offer)",
+      "announcedAt": "2026-08-21T12:12:55",
+      "attachmentCount": 4,
+      "classification": "VALID_ISSUER_TICKER"
+    },
+    "20260821163757-Peng-PK-00059/BEI.PLP/08-2026_id-id": {
+      "ticker": null,
+      "title": "Efek Bersifat Ekuitas Dalam Pemantauan Khusus",
+      "announcedAt": "2026-08-21T16:37:57",
+      "attachmentCount": 1,
+      "classification": "NON_ISSUER_MISSING_TICKER"
+    },
+    "20260821163949-02121/FMS/OPS-BTIM/VIII/26_id-id": {
+      "ticker": "R-ABFII",
+      "title": "Laporan Jumlah Peredaran Unit Penyertaan",
+      "announcedAt": "2026-08-21T16:39:49",
+      "attachmentCount": 1,
+      "classification": "UNSUPPORTED_TICKER"
+    },
+    "20260821173335-949/IPIM-RD/VIII/2026_id-id": {
+      "ticker": "R-LQ45X",
+      "title": "Laporan Harian atas Nilai Aktiva Bersih dan Komposisi Portofolio",
+      "announcedAt": "2026-08-21T17:33:35",
+      "attachmentCount": 2,
+      "classification": "UNSUPPORTED_TICKER"
+    },
+    "20260821175507-1684/MAJORIS/VIII/2026_id-id": {
+      "ticker": "XMIG",
+      "title": "Laporan Harian atas Nilai Aktiva Bersih dan Komposisi Portofolio",
+      "announcedAt": "2026-08-21T17:55:07",
+      "attachmentCount": 3,
+      "classification": "VALID_ISSUER_TICKER"
+    },
+    "20260821182050-022/XMES/08/2026_id-id": {
+      "ticker": "XMES",
+      "title": "Laporan Harian atas Nilai Aktiva Bersih dan Komposisi Portofolio",
+      "announcedAt": "2026-08-21T18:20:50",
+      "attachmentCount": 3,
+      "classification": "VALID_ISSUER_TICKER"
+    },
+    "20260821195331-Peng-P-00949/BEI.PP2/08-2026_id-id": {
+      "ticker": "R-ABFII",
+      "title": "Pengumuman Bursa Pencatatan Tambahan ETF",
+      "announcedAt": "2026-08-21T19:53:31",
+      "attachmentCount": 2,
+      "classification": "UNSUPPORTED_TICKER"
+    },
+    "20260821200235-Peng-P-00953/BEI.PP2/08-2026_id-id": {
+      "ticker": "R-ABFII",
+      "title": "Pengumuman Bursa Pencatatan Tambahan ETF",
+      "announcedAt": "2026-08-21T20:02:35",
+      "attachmentCount": 2,
+      "classification": "UNSUPPORTED_TICKER"
+    },
+    "20260821220913-02132/FMS/OPS-BTIM/VIII/26_id-id": {
+      "ticker": "R-ABFII",
+      "title": "Laporan Harian atas Nilai Aktiva Bersih dan Komposisi Portofolio",
+      "announcedAt": "2026-08-21T22:09:13",
+      "attachmentCount": 4,
+      "classification": "UNSUPPORTED_TICKER"
+    }
+  }
+}
