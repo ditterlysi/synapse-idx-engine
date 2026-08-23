@@ -1,0 +1,1 @@
+One-off recovery trigger after workflow promotion to main.
