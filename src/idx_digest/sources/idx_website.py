@@ -15,6 +15,7 @@ from dateutil.parser import isoparse
 from ..idx_polite_http import (
     CURRENT_IDX_BASE_URL,
     OFFICIAL_IDX_HOSTS,
+    IdxRequestBudgetExceededError,
     IdxResourceNotFoundError,
     PoliteFetchClient,
 )
@@ -386,6 +387,8 @@ class IdxWebsiteSource:
         unavailable_attachment_row_ids: list[str] = []
         attachment_downloads = 0
         attachment_cache_hits = 0
+        request_budget_deferred = False
+        request_budget_deferred_row_id: str | None = None
         newest_at: datetime | None = None
 
         for raw_id, item, announced_at in sorted(candidates, key=lambda row: row[2]):
@@ -418,6 +421,10 @@ class IdxWebsiteSource:
                     continue
                 try:
                     attachment, cache_hit = self._stage_attachment(attachment_raw)
+                except IdxRequestBudgetExceededError:
+                    request_budget_deferred = True
+                    request_budget_deferred_row_id = raw_id
+                    break
                 except IdxResourceNotFoundError:
                     attachment_unavailable = True
                     break
@@ -427,6 +434,8 @@ class IdxWebsiteSource:
                 else:
                     attachment_downloads += 1
 
+            if request_budget_deferred:
+                break
             if attachment_unavailable:
                 if len(unavailable_attachment_row_ids) < 20:
                     unavailable_attachment_row_ids.append(raw_id)
@@ -485,6 +494,8 @@ class IdxWebsiteSource:
             "nonStockProductRowIds": nonstock_product_row_ids,
             "unavailableAttachmentRowsSkipped": len(unavailable_attachment_row_ids),
             "unavailableAttachmentRowIds": unavailable_attachment_row_ids,
+            "requestBudgetDeferred": request_budget_deferred,
+            "requestBudgetDeferredRowId": request_budget_deferred_row_id,
             "issuerDisclosuresProcessed": len(disclosures),
             "checkpointSeenIds": len(seen_checkpoint),
             "disclosuresNew": len(disclosures),

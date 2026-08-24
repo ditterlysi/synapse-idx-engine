@@ -18,6 +18,10 @@ class IdxPoliteHttpError(RuntimeError):
     """Base error for the conservative IDX HTTP transport."""
 
 
+class IdxRequestBudgetExceededError(IdxPoliteHttpError):
+    """Raised when the configured IDX source request budget is exhausted."""
+
+
 class IdxAccessProtectionError(IdxPoliteHttpError):
     """Raised when IDX or an upstream protection layer asks the client to stop."""
 
@@ -125,7 +129,7 @@ class PoliteFetchClient:
         attempt = 0
         while True:
             if self.request_count >= self.max_requests:
-                raise IdxPoliteHttpError("IDX source request budget exceeded")
+                raise IdxRequestBudgetExceededError("IDX source request budget exceeded")
             self._pace()
             self.request_count += 1
             try:
