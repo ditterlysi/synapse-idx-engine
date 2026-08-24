@@ -83,6 +83,10 @@ def main() -> None:
         Path("ops/idx-nonstock-audit-result.json").write_text(
             json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8"
         )
+        raw_ids = sorted({str(row["rawId"]) for row in rows if row.get("rawId")})
+        Path("ops/idx-nonstock-raw-ids.txt").write_text(
+            "\n".join(raw_ids) + "\n", encoding="utf-8"
+        )
         print(json.dumps(report, ensure_ascii=False, indent=2))
     finally:
         client.close()
