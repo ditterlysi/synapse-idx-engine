@@ -40,6 +40,6 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add ops/idx-nonstock-audit-result.json
+          git add ops/idx-nonstock-audit-result.json ops/idx-nonstock-raw-ids.txt
           git diff --cached --quiet || git commit -m "Record legacy IDX non-stock audit"
           git push origin HEAD:ops/idx-nonstock-audit-20260820-23
