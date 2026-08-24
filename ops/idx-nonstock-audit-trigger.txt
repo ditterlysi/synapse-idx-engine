@@ -1,0 +1,2 @@
+triggered: 2026-08-24T07:10:00+07:00
+mode: metadata-only
