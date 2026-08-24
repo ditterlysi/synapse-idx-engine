@@ -1,0 +1,67 @@
+{
+  "ok": false,
+  "runId": "df4a9c73-e00d-4bf9-9c16-5c1ac311e2a1",
+  "status": "PARTIAL",
+  "sourceDiagnostics": {
+    "adapter": "idx-website",
+    "networkAccess": true,
+    "transport": "http-only",
+    "sourceRequests": 26,
+    "pagesFetched": 2,
+    "repliesSeen": 159,
+    "reportedTotal": 159,
+    "paginationStrategy": "wide-page-probe",
+    "metadataRowsCollected": 159,
+    "metadataRowsInRequestedWindow": 134,
+    "alreadySeenInRequestedWindow": 118,
+    "newCandidates": 16,
+    "nonIssuerRowsSkipped": 1,
+    "nonIssuerRowIds": [
+      "20260821163757-Peng-PK-00059/BEI.PLP/08-2026_id-id"
+    ],
+    "unsupportedTickerRowsSkipped": 5,
+    "unsupportedTickerRowIds": [
+      "20260821163949-02121/FMS/OPS-BTIM/VIII/26_id-id",
+      "20260821173335-949/IPIM-RD/VIII/2026_id-id",
+      "20260821195331-Peng-P-00949/BEI.PP2/08-2026_id-id",
+      "20260821200235-Peng-P-00953/BEI.PP2/08-2026_id-id",
+      "20260821220913-02132/FMS/OPS-BTIM/VIII/26_id-id"
+    ],
+    "nonStockProductRowsSkipped": 2,
+    "nonStockProductRowIds": [
+      "20260821175507-1684/MAJORIS/VIII/2026_id-id",
+      "20260821182050-022/XMES/08/2026_id-id"
+    ],
+    "unavailableAttachmentRowsSkipped": 0,
+    "unavailableAttachmentRowIds": [],
+    "issuerDisclosuresProcessed": 8,
+    "checkpointSeenIds": 149,
+    "disclosuresNew": 8,
+    "attachmentDownloads": 24,
+    "attachmentCacheHits": 0,
+    "downloadedBytes": 25276871,
+    "authoritativeCoverageAllowed": false,
+    "widePageProbeSize": 200
+  },
+  "publish": {
+    "disclosuresAvailable": 8,
+    "disclosuresCreated": 0,
+    "disclosuresSkippedReady": 3,
+    "attachmentsStaged": 2,
+    "filesPublished": 0,
+    "filesExtracted": 2,
+    "documentsAnalyzed": 1,
+    "analysesCompleted": 0,
+    "partialDisclosures": 5,
+    "aiRateLimitDeferred": 4,
+    "errors": [
+      "idx-web-20260821212216-1052/BL/CORSEC/SURAT/VIII/2026_id-id: Gemini rate limited (429) after cooldown; retry later: {\n  \"error\": {\n    \"code\": 429,\n    \"message\": \"You exceeded your current quota, please check your plan and billing details. For more information on this error, head to: https://ai.google.dev/gemini-api/docs/rate-limits. To monitor your current usage, head to: https://ai.dev/rate-limit. \\n* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_requests, limit: 500, model: gemini-3.5-flash-lite\\nPlease retry in 136.921661ms.\",\n    \"status\": \"RESOURCE_EXHAUSTED\",\n    \"details\": [\n      {\n        \"@type\": \"type.googleapis.com/google.rpc.Help\",\n        \"links\": [\n          {\n            \"description\": \"Lear…",
+      "idx-web-20260821213506-011/HDK/SP/VIII/2026_id-id: AI_RATE_LIMITED: deferred after earlier provider 429",
+      "idx-web-20260821215844-151/MKNT-OJK/VIII/2026_id-id: AI_RATE_LIMITED: deferred after earlier provider 429",
+      "idx-web-20260821221241-077.34/B/SKet/WMP-CS/VIII/2026_id-id: AI_RATE_LIMITED: deferred after earlier provider 429",
+      "idx-web-20260821224612-038/PIC/CS/VIII-2026_id-id: AI_RATE_LIMITED: deferred after earlier provider 429"
+    ]
+  },
+  "checkpointSeedCount": 149,
+  "durableCheckpointWritten": false
+}
