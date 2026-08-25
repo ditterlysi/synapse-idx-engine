@@ -83,9 +83,6 @@ jobs:
                       "sourceRequests",
                       "checkpointCommitted",
                       "scheduleEnabled",
-                      "aiProvider",
-                      "aiModel",
-                      "aiFallbackUsed",
                   ):
                       if key in report:
                           lines.append(f"- **{key}**: `{report[key]}`")
