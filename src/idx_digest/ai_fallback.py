@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import re
 import threading
 from typing import Any, Callable
@@ -12,6 +13,7 @@ from .gemini_summarizer import GeminiRateLimitError, GeminiSummarizer
 from .observability import RunObserver
 from .summary_schemas import SummaryError
 
+_LOGGER = logging.getLogger(__name__)
 _RETRYABLE_GEMINI_STATUS_RE = re.compile(r"Gemini request failed \((\d{3})\):")
 
 
@@ -148,6 +150,14 @@ class GeminiCloudflareFallbackSummarizer:
             self.settings.openrouter_provider = CLOUDFLARE_PROVIDER
             self.settings.openrouter_model = str(getattr(self.fallback, "api_model", ""))
 
+        _LOGGER.warning(
+            "AI provider fallback activated: google-gemini/%s -> %s/%s (%s: %s)",
+            getattr(self.primary, "api_model", "unknown"),
+            CLOUDFLARE_PROVIDER,
+            getattr(self.fallback, "api_model", "unknown"),
+            type(error).__name__,
+            str(error)[:500],
+        )
         if self.observer:
             self.observer.event(
                 "llm",
