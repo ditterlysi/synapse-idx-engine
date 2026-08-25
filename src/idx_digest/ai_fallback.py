@@ -78,6 +78,10 @@ class GeminiCloudflareFallbackSummarizer:
         primary_factory: SummarizerFactory = FallbackAwareGeminiSummarizer,
         fallback_factory: SummarizerFactory = CloudflareWorkersAISummarizer,
     ) -> None:
+        # resolve_ai_provider supplies an isolated runtime copy. Updating the
+        # legacy provenance fields on that copy is therefore safe and lets the
+        # existing SourceIngestionRunner commit the provider/model that actually
+        # produced the final validated analysis without mutating user settings.
         self.settings = settings
         self.observer = observer
         self.primary = primary_factory(settings, observer=observer)
@@ -137,6 +141,12 @@ class GeminiCloudflareFallbackSummarizer:
             self._fallback_active = True
             self._fallback_count += 1
             self._fallback_reason = f"{type(error).__name__}: {error}"
+            # The Settings object here is the runtime copy owned by
+            # AIProviderRuntime. SourceIngestionRunner still reads these legacy
+            # fields when building the commit request, so switch them atomically
+            # together with the sticky provider state.
+            self.settings.openrouter_provider = CLOUDFLARE_PROVIDER
+            self.settings.openrouter_model = str(getattr(self.fallback, "api_model", ""))
 
         if self.observer:
             self.observer.event(
