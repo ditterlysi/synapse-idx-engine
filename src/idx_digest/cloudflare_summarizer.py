@@ -71,10 +71,7 @@ class CloudflareWorkersAISummarizer(OpenRouterSummarizer):
         if not model:
             raise ValueError("CLOUDFLARE_AI_MODEL must not be empty")
 
-        base_url = (
-            settings.cloudflare_ai_base_url.rstrip("/")
-            + f"/{account_id}/ai/v1"
-        )
+        base_url = settings.cloudflare_ai_base_url.rstrip("/") + f"/{account_id}/ai/v1"
         shim = settings.model_copy(
             update={
                 "openrouter_api_key": api_token,
@@ -94,6 +91,9 @@ class CloudflareWorkersAISummarizer(OpenRouterSummarizer):
         self, payload: dict[str, typing.Any]
     ) -> tuple[typing.Any, dict[str, typing.Any]]:
         request = build_cloudflare_request(payload)
+        # Never trust a caller-provided model value at this transport boundary.
+        # The configured Cloudflare-hosted model is pinned for every fallback call.
+        request["model"] = self.api_model
         try:
             response = self.client.post("chat/completions", json=request)
         except httpx.HTTPError as exc:
