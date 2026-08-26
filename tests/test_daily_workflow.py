@@ -34,6 +34,7 @@ def test_daily_workflow_exposes_lightweight_observability_without_extra_idx_or_a
 
     assert "Capture durable source state" in workflow
     assert "synapse-idx-website health > idx-daily-health.json" in workflow
+    assert "idx-daily-health.json" in workflow
     assert "continue-on-error: true" in workflow
     assert "processingOk" in workflow
     assert "requestBudgetDeferred" in workflow
