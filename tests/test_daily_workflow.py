@@ -27,3 +27,27 @@ def test_daily_workflow_keeps_production_guardrails() -> None:
     forbidden = ("playwright install", "proxy rotation", "captcha solving")
     lowered = workflow.lower()
     assert all(token not in lowered for token in forbidden)
+
+
+def test_daily_workflow_exposes_lightweight_observability_without_extra_idx_or_ai_calls() -> None:
+    workflow = Path(".github/workflows/daily.yml").read_text(encoding="utf-8")
+
+    assert "Capture durable source state" in workflow
+    assert "synapse-idx-website health > idx-daily-health.json" in workflow
+    assert "continue-on-error: true" in workflow
+    assert "processingOk" in workflow
+    assert "requestBudgetDeferred" in workflow
+    assert "requestBudgetDeferredRowId" in workflow
+    assert "checkpointSeenIdsBefore" in workflow
+    assert "checkpointSeenIdsAfter" in workflow
+    assert "latestAnnouncedAt" in workflow
+    assert "issuerDisclosuresProcessed" in workflow
+    assert "disclosuresCreated" in workflow
+    assert "analysesCompleted" in workflow
+    assert "partialDisclosures" in workflow
+    assert "errorsCount" in workflow
+    assert "AI fallback activation is emitted as a warning" in workflow
+
+    # The observability snapshot is the CLI health command, which reads Synapse
+    # source state only. It must not introduce another collector invocation.
+    assert workflow.count("synapse-idx-website daily --confirm-schedule") == 1
