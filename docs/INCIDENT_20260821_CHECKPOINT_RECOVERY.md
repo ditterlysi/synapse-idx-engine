@@ -2,23 +2,33 @@
 
 ## Status
 
-The checkpoint data-loss mechanism is fixed and the affected source window has been reconciled.
+**Closed — Production Revalidated on 2026-08-26.**
+
+The checkpoint data-loss mechanism is fixed, the affected source window has been reconciled, the Gemini backlog was cleared, and a later natural scheduled daily run has now proven the repaired collector in production.
 
 The AI backlog caused by Gemini free-tier quota exhaustion was cleared on 2026-08-24 after quota became available again. Retry run `60227561-e58f-4eb4-92ae-b3b6eb81c90c` processed all six pending stock-scope disclosures successfully.
 
-Current production state after the retry:
+Final production validation was provided by the natural GitHub Actions schedule on 2026-08-26:
 
-- 159 total disclosures;
-- 116 stock-scope disclosures;
-- 116 stock-scope `READY`;
-- 0 stock-scope non-`READY`;
-- 43 quarantined legacy non-stock disclosures;
-- 155 canonical `idx-web-*` rows with 155 distinct announcement IDs;
-- 112 stock-scope `idx-web-*` canonical rows, all `READY`, all with active analyses and file records.
+- GitHub Actions workflow: `IDX Daily Collector`, run #8 (`32895256845`);
+- trigger: `schedule` (not manual);
+- production ingestion run: `99740537-a86f-4e8c-ace8-6f52b98ffc29`;
+- terminal status: `PARTIAL / SOURCE_COVERAGE_UNPROVEN`, the expected non-authoritative website-source status;
+- `processingOk=true`;
+- source requests: 50;
+- request-budget deferral: `true`;
+- issuer disclosures processed: 18;
+- canonical disclosures created: 17;
+- files extracted: 46;
+- analyses completed: 18;
+- durable checkpoint advanced from 115 to 133 seen source IDs;
+- `latestAnnouncedAt` advanced to `2026-08-24T10:54:29+07:00`;
+- production stock-scope state after the run: 133/133 `READY`, 0 non-`READY`;
+- duplicate non-null `idx_announcement_id` groups: 0.
 
-The durable website checkpoint now contains 115 unique stock-scope READY source IDs, including valid `sourceAliases`, and has zero intersection with quarantined non-stock or non-READY rows.
+The source still reached its configured 50-request budget, but the repaired behavior preserved all fully completed work, deferred the in-progress row, committed the durable checkpoint, and returned a healthy processing result instead of failing the entire run. This is the production acceptance condition for the request-budget defect.
 
-Production is **not yet labeled fully revalidated** only because a later natural scheduled daily run must still execute successfully with the current code and checkpoint.
+The 43 quarantined legacy non-stock disclosures remain preserved for backend audit and excluded from authenticated stock-scope reads.
 
 ## Incident summary
 
@@ -84,6 +94,19 @@ PR #36, merged as `73f0032052eeca9f6cfbb9f853db04a69a92d573`:
 - report `AI_RATE_LIMITED` instead of producing a retry storm.
 
 Recovery run `df4a9c73-e00d-4bf9-9c16-5c1ac311e2a1` proved the circuit breaker: one candidate reached the exhausted Gemini quota and seven remaining candidates were deferred without repeated AI calls.
+
+### Daily request-budget progress preservation
+
+PR #40, merged as `1d4d79a9d0083e0409333f4619816a70e24295ab`:
+
+- type IDX request-budget exhaustion separately from unrelated source failures;
+- preserve fully staged disclosures when the source-request budget is reached later in the candidate loop;
+- do not publish or checkpoint the partially staged current row;
+- stop later candidates for that run and leave them retryable;
+- allow successful processing to commit progress so the next daily run resumes from a newer checkpoint;
+- keep the configured request limit unchanged.
+
+The 2026-08-26 natural cron reached exactly 50 source requests, set `requestBudgetDeferred=true`, processed 18 issuer disclosures, committed the checkpoint from 115 to 133 seen IDs, and completed with `processingOk=true`. It did **not** regress to `FAILED / SOURCE_RUN_FAILED`. This production run revalidated the fix.
 
 ## Official non-stock audit and quarantine
 
@@ -158,9 +181,7 @@ BUKA, MEJA, and TUGU each have three published file records; MKNT, WMPP, and PIC
 
 ## Durable checkpoint rebuild
 
-The active source-state holder is now retry run `60227561-e58f-4eb4-92ae-b3b6eb81c90c`.
-
-The durable checkpoint is rebuilt from all current `READY`, stock-scope `idx-web-*` canonical IDs plus valid stock-scope `sourceAliases`:
+The recovery checkpoint was rebuilt in retry run `60227561-e58f-4eb4-92ae-b3b6eb81c90c` from all current `READY`, stock-scope `idx-web-*` canonical IDs plus valid stock-scope `sourceAliases`:
 
 - canonical stock-scope READY `idx-web-*` rows: 112;
 - `seenIds`: 115 unique source IDs;
@@ -169,9 +190,31 @@ The durable checkpoint is rebuilt from all current `READY`, stock-scope `idx-web
 - non-READY intersection: 0;
 - rebuild marker: `post-ai-retry-stock-scope-ready-20260824`.
 
-The earlier safe 109-ID checkpoint in run `a3b3d603-b978-4fe8-8641-c44877d2b0c5` remains historical evidence but is superseded by the newer source-state row. The poisoned 306-ID source-state row remains untouched.
+That recovery checkpoint was then superseded normally by the successful natural daily run on 2026-08-26. The active durable checkpoint after production revalidation contains 133 seen source IDs and `latestAnnouncedAt = 2026-08-24T10:54:29+07:00`.
 
-The two unresolved BXS IDs remain separately recorded as incident evidence and intentionally excluded from `seenIds`.
+The earlier safe 109-ID checkpoint in run `a3b3d603-b978-4fe8-8641-c44877d2b0c5` remains historical evidence. The poisoned 306-ID source-state row also remains untouched.
+
+The two unresolved BXS IDs remain separately recorded as incident evidence and intentionally excluded from the recovery `seenIds`; if either reappears from IDX it remains eligible for normal processing.
+
+## Production revalidation
+
+The final acceptance run was not a manual backfill or workflow dispatch. GitHub Actions invoked the normal scheduled workflow from `main` on 2026-08-26.
+
+Production ingestion run `99740537-a86f-4e8c-ace8-6f52b98ffc29` proved all remaining acceptance properties:
+
+1. scheduler execution was natural (`event=schedule`);
+2. the source budget reached 50 without aborting and discarding completed work;
+3. `processingOk=true` and there were no publish errors or partial disclosures;
+4. the run ended `PARTIAL / SOURCE_COVERAGE_UNPROVEN`, which is expected because the website adapter intentionally does not claim authoritative coverage;
+5. the durable checkpoint committed and advanced from 115 to 133 seen source IDs;
+6. 18 analyses completed and 17 new canonical disclosures were created;
+7. all 133 stock-scope disclosures were `READY` after the run;
+8. stock-scope non-`READY` remained 0;
+9. duplicate non-null `idx_announcement_id` groups remained 0.
+
+**Verdict: Production Revalidated. Incident closed.**
+
+The remaining question of whether 50 source requests per day provide enough sustained throughput to catch up with future IDX volume is a separate capacity/operations concern, not an unresolved correctness defect from this incident.
 
 ## Operational cleanup
 
@@ -179,13 +222,13 @@ The two unresolved BXS IDs remain separately recorded as incident evidence and i
 - The temporary `idx-recovery-20260821.yml` workflow was removed from `main`.
 - The bounded AI retry package was validated with Ruff and the full pytest suite, executed only from its ops branch, and was never merged into `main`.
 - Failed, cancelled, and poisoned historical ingestion/source-state rows are preserved as evidence.
-- `.github/workflows/daily.yml` remains unchanged.
+- The production schedule remains `0 20 * * *` (20:00 UTC / approximately 03:00 Asia/Jakarta). Later observability-only workflow summary changes do not alter collector scheduling or ingestion semantics.
 
 ## Exit criteria for production validation
 
 1. **Complete:** all six previously pending stock-scope disclosures are `READY` with active analyses and files.
-2. **Complete:** the rebuilt 115-ID checkpoint contains no quarantined non-stock or non-READY source IDs.
-3. **Pending:** a later natural scheduled daily run must execute with the current source code and checkpoint without a real source/processing failure.
+2. **Complete:** the rebuilt 115-ID recovery checkpoint contained no quarantined non-stock or non-READY source IDs.
+3. **Complete:** a later natural scheduled daily run executed with the repaired source code and checkpoint without a real source/processing failure, while preserving progress at the 50-request budget.
 4. **Ongoing invariant:** if either unresolved BXS source ID reappears, it must be investigated and processed rather than silently checkpointed.
 
-Until criterion 3 is observed, the incident recovery is complete but the collector remains pending final natural-cron production revalidation.
+All incident exit criteria are satisfied. Capacity monitoring and the unresolved-BXS invariant continue as normal operations.
