@@ -57,6 +57,14 @@ jobs:
           set -o pipefail
           synapse-idx-website daily --confirm-schedule | tee idx-daily-report.json
 
+      # Read-only Synapse source-state check. It does not contact IDX or AI and
+      # cannot advance the checkpoint. continue-on-error keeps observability
+      # from masking the collector's actual outcome.
+      - name: Capture durable source state
+        if: always()
+        continue-on-error: true
+        run: synapse-idx-website health > idx-daily-health.json
+
       - name: Write run summary
         if: always()
         run: |
@@ -66,8 +74,11 @@ jobs:
           from pathlib import Path
 
           report_path = Path("idx-daily-report.json")
+          health_path = Path("idx-daily-health.json")
           summary_path = Path(os.environ["GITHUB_STEP_SUMMARY"])
           lines = ["## IDX Daily Collector", ""]
+
+          report = None
           if not report_path.exists() or not report_path.read_text(encoding="utf-8").strip():
               lines.append("No collector JSON report was produced.")
           else:
@@ -75,30 +86,83 @@ jobs:
                   report = json.loads(report_path.read_text(encoding="utf-8"))
               except json.JSONDecodeError as exc:
                   lines.append(f"Collector report was not valid JSON: `{exc}`")
-              else:
+
+          if isinstance(report, dict):
+              lines.append("### Run")
+              for key in (
+                  "ok",
+                  "status",
+                  "runId",
+                  "processingOk",
+                  "sourceRequests",
+                  "checkpointCommitted",
+                  "scheduleEnabled",
+              ):
+                  if key in report:
+                      lines.append(f"- **{key}**: `{report[key]}`")
+
+              source = report.get("sourceDiagnostics")
+              if isinstance(source, dict):
+                  lines.extend(["", "### Source / progress"])
+                  source_fields = (
+                      ("requestBudgetDeferred", "requestBudgetDeferred"),
+                      ("requestBudgetDeferredRowId", "requestBudgetDeferredRowId"),
+                      ("checkpointSeenIds", "checkpointSeenIdsBefore"),
+                      ("issuerDisclosuresProcessed", "issuerDisclosuresProcessed"),
+                      ("newCandidates", "newCandidates"),
+                      ("alreadySeenInRequestedWindow", "alreadySeenInRequestedWindow"),
+                      ("metadataRowsInRequestedWindow", "metadataRowsInRequestedWindow"),
+                  )
+                  for source_key, label in source_fields:
+                      if source_key in source:
+                          lines.append(f"- **{label}**: `{source[source_key]}`")
+
+              publish = report.get("publish")
+              if isinstance(publish, dict):
+                  lines.extend(["", "### Publish / AI"])
                   for key in (
-                      "ok",
-                      "status",
-                      "runId",
-                      "sourceRequests",
-                      "checkpointCommitted",
-                      "scheduleEnabled",
+                      "disclosuresAvailable",
+                      "disclosuresCreated",
+                      "attachmentsStaged",
+                      "filesExtracted",
+                      "documentsAnalyzed",
+                      "analysesCompleted",
+                      "partialDisclosures",
                   ):
-                      if key in report:
-                          lines.append(f"- **{key}**: `{report[key]}`")
-                  publish = report.get("publish")
-                  if isinstance(publish, dict):
-                      for key in (
-                          "disclosuresAvailable",
-                          "disclosuresCreated",
-                          "attachmentsStaged",
-                          "filesExtracted",
-                          "documentsAnalyzed",
-                          "analysesCompleted",
-                          "partialDisclosures",
-                      ):
-                          if key in publish:
-                              lines.append(f"- **publish.{key}**: `{publish[key]}`")
+                      if key in publish:
+                          lines.append(f"- **{key}**: `{publish[key]}`")
+                  errors = publish.get("errors")
+                  if isinstance(errors, list):
+                      lines.append(f"- **errorsCount**: `{len(errors)}`")
+
+          health = None
+          if health_path.exists() and health_path.read_text(encoding="utf-8").strip():
+              try:
+                  health = json.loads(health_path.read_text(encoding="utf-8"))
+              except json.JSONDecodeError:
+                  health = None
+
+          if isinstance(health, dict):
+              checkpoint = health.get("checkpoint")
+              if isinstance(checkpoint, dict):
+                  seen_ids = checkpoint.get("seenIds")
+                  lines.extend(["", "### Durable checkpoint after run"])
+                  if isinstance(seen_ids, list):
+                      lines.append(f"- **checkpointSeenIdsAfter**: `{len(seen_ids)}`")
+                  if "latestAnnouncedAt" in checkpoint:
+                      lines.append(f"- **latestAnnouncedAt**: `{checkpoint['latestAnnouncedAt']}`")
+                  if "committedAt" in checkpoint:
+                      lines.append(f"- **committedAt**: `{checkpoint['committedAt']}`")
+          elif report is not None:
+              lines.extend(["", "### Durable checkpoint after run", "- Source-state health snapshot unavailable."])
+
+          lines.extend(
+              [
+                  "",
+                  "> AI fallback activation is emitted as a warning in the job log; the final provider/model is persisted with each completed analysis. No run-level fallback-used field is inferred here.",
+              ]
+          )
+
           summary_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
           PY
 
