@@ -18,6 +18,14 @@ class Settings(BaseSettings):
     gemini_base_url: str = "https://generativelanguage.googleapis.com/v1beta"
     gemini_model: str = "gemini-3.5-flash-lite"
 
+    # Optional free-tier fallback for direct Gemini. The fallback is enabled only
+    # when both account id and API token are present, so adding this code does not
+    # change production behavior until credentials are deliberately configured.
+    cloudflare_ai_account_id: str = ""
+    cloudflare_ai_api_token: str = ""
+    cloudflare_ai_base_url: str = "https://api.cloudflare.com/client/v4/accounts"
+    cloudflare_ai_model: str = "@cf/zai-org/glm-4.7-flash"
+
     # OpenRouter is OpenAI-compatible. Provider routing is pinned separately so
     # the selected model cannot silently run on a different host.
     openrouter_api_key: str = ""
@@ -114,6 +122,14 @@ class Settings(BaseSettings):
     @property
     def prompt_config_path(self) -> Path:
         return self.data_dir / "prompts.json"
+
+    @property
+    def cloudflare_ai_configured(self) -> bool:
+        """True only when the complete optional Workers AI credential pair exists."""
+        return bool(
+            self.cloudflare_ai_account_id.strip()
+            and self.cloudflare_ai_api_token.strip()
+        )
 
     @property
     def openrouter_provider_preferences(self) -> dict[str, object]:

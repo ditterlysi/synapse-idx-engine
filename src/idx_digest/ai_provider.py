@@ -3,6 +3,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Callable
 
+from .ai_fallback import GeminiCloudflareFallbackSummarizer
+from .cloudflare_summarizer import CLOUDFLARE_PROVIDER
 from .config import Settings
 from .gemini_summarizer import GeminiSummarizer
 from .summarizer import OpenRouterSummarizer
@@ -14,9 +16,10 @@ SummarizerFactory = Callable[[Settings], Any]
 class AIProviderRuntime:
     """Resolved analysis backend plus a compatibility settings snapshot.
 
-    SourceIngestionRunner still writes provenance from the legacy OpenRouter-named
-    model/provider fields. The copied settings snapshot keeps that compatibility
-    boundary accurate without mutating the caller's Settings object.
+    SourceIngestionRunner still writes primary provenance from legacy
+    OpenRouter-named settings. Fallback-aware summarizers can override the final
+    analysis provider/model at commit time when a fallback actually supplies the
+    validated result.
     """
 
     backend: str
@@ -24,6 +27,21 @@ class AIProviderRuntime:
     model: str
     settings: Settings
     summarizer_factory: SummarizerFactory
+    fallback_provider: str | None = None
+    fallback_model: str | None = None
+
+
+def _cloudflare_fallback_issues(settings: Settings, *, context: str) -> list[str]:
+    account_id = settings.cloudflare_ai_account_id.strip()
+    api_token = settings.cloudflare_ai_api_token.strip()
+    if bool(account_id) != bool(api_token):
+        return [
+            "CLOUDFLARE_AI_ACCOUNT_ID and CLOUDFLARE_AI_API_TOKEN must both be set "
+            f"to enable Gemini fallback for {context}"
+        ]
+    if account_id and api_token and not settings.cloudflare_ai_model.strip():
+        return [f"CLOUDFLARE_AI_MODEL is required for {context} when Gemini fallback is enabled"]
+    return []
 
 
 def ai_provider_issues(settings: Settings, *, context: str) -> list[str]:
@@ -34,6 +52,7 @@ def ai_provider_issues(settings: Settings, *, context: str) -> list[str]:
             issues.append(f"GEMINI_API_KEY is required for {context} when AI_PROVIDER=gemini")
         if not settings.gemini_model.strip():
             issues.append(f"GEMINI_MODEL is required for {context} when AI_PROVIDER=gemini")
+        issues.extend(_cloudflare_fallback_issues(settings, context=context))
         return issues
     if provider == "openrouter":
         issues = []
@@ -61,12 +80,20 @@ def resolve_ai_provider(settings: Settings) -> AIProviderRuntime:
                 "openrouter_provider": "google-gemini",
             }
         )
+        fallback_enabled = runtime_settings.cloudflare_ai_configured
+        fallback_model = runtime_settings.cloudflare_ai_model.strip() if fallback_enabled else None
+        if fallback_enabled and not fallback_model:
+            raise ValueError("CLOUDFLARE_AI_MODEL must not be empty when Gemini fallback is enabled")
         return AIProviderRuntime(
             backend="gemini",
             provider="google-gemini",
             model=model,
             settings=runtime_settings,
-            summarizer_factory=GeminiSummarizer,
+            summarizer_factory=(
+                GeminiCloudflareFallbackSummarizer if fallback_enabled else GeminiSummarizer
+            ),
+            fallback_provider=CLOUDFLARE_PROVIDER if fallback_enabled else None,
+            fallback_model=fallback_model,
         )
 
     if backend == "openrouter":
