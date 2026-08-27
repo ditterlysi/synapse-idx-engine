@@ -28,6 +28,8 @@ IDX_ANNOUNCEMENT_ENDPOINT = "/primary/ListedCompany/GetAnnouncement"
 IDX_DISCLOSURE_PAGE = f"{CURRENT_IDX_BASE_URL}/id/perusahaan-tercatat/keterbukaan-informasi"
 CHECKPOINT_SCHEMA = "synapse-idx-website-checkpoint-v1"
 MAX_WINDOW = timedelta(hours=48)
+RECOVERY_LANE_NEWEST_HEAD = 6
+RECOVERY_LANE_OLDEST_SLOTS = 3
 NON_STOCK_PRODUCT_FLAGS = (
     "EfekEmiten_ETF",
     "EfekEmiten_DIRE",
@@ -139,6 +141,34 @@ def _dedupe_items(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
         if item_id and item_id not in unique:
             unique[item_id] = item
     return list(unique.values())
+
+
+def _prioritize_candidates(
+    candidates: list[tuple[str, dict[str, Any], datetime]],
+) -> tuple[list[tuple[str, dict[str, Any], datetime]], list[str]]:
+    """Keep newest-first service while reserving deterministic backlog retries.
+
+    The first few newest disclosures remain the real-time priority. When there is
+    a deeper backlog, a small set of the oldest uncheckpointed candidates is then
+    promoted ahead of the remaining newest-first queue so a full request budget
+    cannot starve the same old disclosures forever.
+    """
+
+    newest_first = sorted(candidates, key=lambda row: row[2], reverse=True)
+    if len(newest_first) <= RECOVERY_LANE_NEWEST_HEAD:
+        return newest_first, []
+
+    recovery_count = min(
+        RECOVERY_LANE_OLDEST_SLOTS,
+        len(newest_first) - RECOVERY_LANE_NEWEST_HEAD,
+    )
+    if recovery_count <= 0:
+        return newest_first, []
+
+    head = newest_first[:RECOVERY_LANE_NEWEST_HEAD]
+    recovery = list(reversed(newest_first[-recovery_count:]))
+    remaining = newest_first[RECOVERY_LANE_NEWEST_HEAD:-recovery_count]
+    return [*head, *recovery, *remaining], [row[0] for row in recovery]
 
 
 class IdxWebsiteSource:
@@ -383,6 +413,7 @@ class IdxWebsiteSource:
                 continue
             candidates.append((raw_id, item, announced_at))
 
+        ordered_candidates, recovery_lane_ids = _prioritize_candidates(candidates)
         disclosures: list[SourceDisclosure] = []
         processed_ids: list[str] = []
         nonissuer_row_ids: list[str] = []
@@ -400,7 +431,7 @@ class IdxWebsiteSource:
         request_budget_deferred_row_id: str | None = None
         newest_at: datetime | None = None
 
-        for raw_id, item, announced_at in sorted(candidates, key=lambda row: row[2], reverse=True):
+        for raw_id, item, announced_at in ordered_candidates:
             announcement = item.get("pengumuman") or {}
             ticker = str(announcement.get("Kode_Emiten") or "").strip().upper()
             if not ticker:
@@ -537,6 +568,10 @@ class IdxWebsiteSource:
             "metadataRowsInRequestedWindow": len(ids_in_window),
             "alreadySeenInRequestedWindow": already_seen_in_window,
             "newCandidates": len(candidates),
+            "candidateOrdering": "newest-head-oldest-recovery-newest",
+            "recoveryLaneNewestHead": min(len(candidates), RECOVERY_LANE_NEWEST_HEAD),
+            "recoveryLaneCandidates": len(recovery_lane_ids),
+            "recoveryLaneRowIds": recovery_lane_ids,
             "nonIssuerRowsSkipped": len(nonissuer_row_ids),
             "nonIssuerRowIds": nonissuer_row_ids,
             "unsupportedTickerRowsSkipped": len(unsupported_ticker_row_ids),
