@@ -16,6 +16,9 @@ _RETRY_IN_RE = re.compile(r"retry in\s+([0-9]+(?:\.[0-9]+)?)s", re.IGNORECASE)
 _DURATION_RE = re.compile(r"^\s*([0-9]+(?:\.[0-9]+)?)s\s*$", re.IGNORECASE)
 _DEFAULT_RATE_LIMIT_COOLDOWN_SECONDS = 60.0
 _MAX_RATE_LIMIT_COOLDOWN_SECONDS = 120.0
+_DAILY_AI_SESSION_MAX_SECONDS = 2400.0
+_DAILY_AI_REQUEST_MAX_SECONDS = 120.0
+_DAILY_AI_DEADLINE_FLOOR_SECONDS = 1.0
 
 
 class GeminiRateLimitError(ValueError):
@@ -30,6 +33,13 @@ class GeminiRateLimitError(ValueError):
         super().__init__(message)
         self.status_code = 429
         self.retry_after_seconds = retry_after_seconds
+
+
+class GeminiRunDeadlineError(ValueError):
+    """Intentional daily-run deadline, distinct from an upstream provider failure."""
+
+    run_deadline_exceeded = True
+    retryable_provider_failure = False
 
 
 def _message_text(content: typing.Any) -> str:
@@ -151,8 +161,12 @@ class GeminiSummarizer(OpenRouterSummarizer):
 
     After the first HTTP 429 in a run, Gemini requests are serialized and share a
     provider-directed cooldown. A disclosure gets one cooldown retry. If Gemini
-    still returns 429, processing stops for that disclosure so a later run can
-    resume it without repeatedly burning quota in the same window.
+    still returns 429, processing stops for that disclosure so a later ingestion
+    pass can resume it without repeatedly burning quota in the same window.
+
+    Scheduled daily runs additionally cap the Gemini phase. This prevents one
+    multi-document disclosure from occupying the process until the outer GitHub
+    Actions timeout kills it before Synapse run state/checkpoint can be finalized.
     """
 
     def __init__(
@@ -199,6 +213,40 @@ class GeminiSummarizer(OpenRouterSummarizer):
         self._gemini_rate_limit_serial = threading.Lock()
         self._gemini_rate_limit_until = 0.0
         self._gemini_serialize_after_429 = False
+        self._run_deadline_at: float | None = None
+        if settings.synapse_daily_enabled:
+            self._run_deadline_at = time.monotonic() + min(
+                _DAILY_AI_SESSION_MAX_SECONDS,
+                max(
+                    60.0,
+                    float(settings.synapse_daily_max_run_seconds) / 2.0,
+                ),
+            )
+
+    def _remaining_run_seconds(self) -> float | None:
+        deadline = getattr(self, "_run_deadline_at", None)
+        if deadline is None:
+            return None
+        remaining = deadline - time.monotonic()
+        if remaining <= _DAILY_AI_DEADLINE_FLOOR_SECONDS:
+            raise GeminiRunDeadlineError(
+                "daily Gemini analysis deadline reached; remaining disclosures are deferred"
+            )
+        return remaining
+
+    def _request_timeout_seconds(self) -> float | None:
+        remaining = self._remaining_run_seconds()
+        if remaining is None:
+            return None
+        timeout_seconds = min(
+            _DAILY_AI_REQUEST_MAX_SECONDS,
+            remaining - _DAILY_AI_DEADLINE_FLOOR_SECONDS,
+        )
+        if timeout_seconds <= _DAILY_AI_DEADLINE_FLOOR_SECONDS:
+            raise GeminiRunDeadlineError(
+                "daily Gemini analysis deadline reached before a new request could start"
+            )
+        return timeout_seconds
 
     def _ensure_rate_limit_state(self) -> None:
         # Some focused unit tests instantiate the adapter with object.__new__.
@@ -213,6 +261,11 @@ class GeminiSummarizer(OpenRouterSummarizer):
         delay = _bounded_retry_seconds(seconds)
         if delay is None:
             delay = _DEFAULT_RATE_LIMIT_COOLDOWN_SECONDS
+        remaining_run = self._remaining_run_seconds()
+        if remaining_run is not None and delay >= remaining_run - _DAILY_AI_DEADLINE_FLOOR_SECONDS:
+            raise GeminiRunDeadlineError(
+                "Gemini cooldown would exceed the daily analysis deadline; retry next run"
+            )
         with self._gemini_rate_limit_lock:
             self._gemini_serialize_after_429 = True
             self._gemini_rate_limit_until = max(
@@ -236,25 +289,50 @@ class GeminiSummarizer(OpenRouterSummarizer):
         self._ensure_rate_limit_state()
         with self._gemini_rate_limit_lock:
             remaining = max(0.0, self._gemini_rate_limit_until - time.monotonic())
-        if remaining > 0:
-            time.sleep(remaining)
+        if remaining <= 0:
+            self._remaining_run_seconds()
+            return
+        remaining_run = self._remaining_run_seconds()
+        if remaining_run is not None and remaining >= remaining_run - _DAILY_AI_DEADLINE_FLOOR_SECONDS:
+            raise GeminiRunDeadlineError(
+                "Gemini cooldown would exceed the daily analysis deadline; retry next run"
+            )
+        time.sleep(remaining)
+        self._remaining_run_seconds()
 
     def _post_generate_content(self, request: dict[str, typing.Any]) -> httpx.Response:
         self._ensure_rate_limit_state()
         with self._gemini_rate_limit_lock:
             serialize = self._gemini_serialize_after_429
-        if serialize:
-            with self._gemini_rate_limit_serial:
-                self._wait_for_rate_limit_cooldown()
+
+        def send() -> httpx.Response:
+            self._wait_for_rate_limit_cooldown()
+            timeout_seconds = self._request_timeout_seconds()
+            try:
+                if timeout_seconds is None:
+                    return self.client.post(
+                        f"models/{self.api_model}:generateContent",
+                        json=request,
+                    )
                 return self.client.post(
                     f"models/{self.api_model}:generateContent",
                     json=request,
+                    timeout=httpx.Timeout(
+                        timeout_seconds,
+                        connect=min(20.0, timeout_seconds),
+                    ),
                 )
-        self._wait_for_rate_limit_cooldown()
-        return self.client.post(
-            f"models/{self.api_model}:generateContent",
-            json=request,
-        )
+            except httpx.TimeoutException as exc:
+                try:
+                    self._remaining_run_seconds()
+                except GeminiRunDeadlineError as deadline_exc:
+                    raise deadline_exc from exc
+                raise
+
+        if serialize:
+            with self._gemini_rate_limit_serial:
+                return send()
+        return send()
 
     def _request_non_streaming(
         self, payload: dict[str, typing.Any]
@@ -262,6 +340,7 @@ class GeminiSummarizer(OpenRouterSummarizer):
         request = build_gemini_request(payload)
         response: httpx.Response | None = None
         for attempt in range(2):
+            self._remaining_run_seconds()
             response = self._post_generate_content(request)
             if response.status_code != 429:
                 break
