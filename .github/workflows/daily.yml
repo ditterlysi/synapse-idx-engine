@@ -17,7 +17,7 @@ jobs:
   collect:
     if: ${{ vars.IDX_DAILY_ENABLED == 'true' }}
     runs-on: ubuntu-latest
-    timeout-minutes: 50
+    timeout-minutes: 90
     env:
       AI_PROVIDER: gemini
       GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
@@ -30,6 +30,8 @@ jobs:
       SYNAPSE_DAILY_ENABLED: "true"
       APP_TIMEZONE: Asia/Jakarta
       SYNAPSE_DAILY_TRANSPORT: http
+      SYNAPSE_DAILY_MAX_SOURCE_REQUESTS: "100"
+      SYNAPSE_DAILY_MAX_RUN_SECONDS: "4800"
       SYNAPSE_DAILY_ALLOW_HISTORICAL_BACKFILL: "false"
       SYNAPSE_DAILY_ALLOW_TICKER_FANOUT: "false"
 
