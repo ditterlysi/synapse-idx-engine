@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+import mimetypes
 import re
+import tempfile
 import time
 import warnings
+import zipfile
 from dataclasses import dataclass
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 import openpyxl
 import pymupdf
@@ -15,6 +18,25 @@ from PIL import Image
 
 from .config import Settings
 from .observability import RunObserver
+
+
+ZIP_MAX_MEMBERS = 100
+ZIP_MAX_SUPPORTED_MEMBERS = 50
+ZIP_MAX_MEMBER_UNCOMPRESSED_BYTES = 50_000_000
+ZIP_MAX_TOTAL_UNCOMPRESSED_BYTES = 100_000_000
+ZIP_MAX_COMPRESSION_RATIO = 200.0
+ZIP_SUPPORTED_SUFFIXES = {
+    ".pdf",
+    ".xlsx",
+    ".xlsm",
+    ".docx",
+    ".html",
+    ".htm",
+    ".txt",
+    ".csv",
+    ".json",
+    ".xml",
+}
 
 
 @dataclass(frozen=True)
@@ -271,6 +293,107 @@ def extract_text(path: Path, observer: RunObserver | None = None) -> ExtractionR
     return result
 
 
+def _validate_zip_member(info: zipfile.ZipInfo) -> PurePosixPath:
+    raw_name = info.filename.replace("\\", "/")
+    member_path = PurePosixPath(raw_name)
+    if member_path.is_absolute() or ".." in member_path.parts:
+        raise ValueError(f"Unsafe ZIP member path: {info.filename!r}")
+    unix_mode = (info.external_attr >> 16) & 0o170000
+    if unix_mode == 0o120000:
+        raise ValueError(f"ZIP symlink member is not allowed: {info.filename!r}")
+    if info.flag_bits & 0x1:
+        raise ValueError(f"Encrypted ZIP member is not supported: {info.filename!r}")
+    if info.file_size < 0 or info.file_size > ZIP_MAX_MEMBER_UNCOMPRESSED_BYTES:
+        raise ValueError(f"ZIP member exceeds safe size limit: {info.filename!r}")
+    if info.file_size > 0:
+        if info.compress_size <= 0:
+            raise ValueError(f"ZIP member has suspicious compressed size: {info.filename!r}")
+        ratio = info.file_size / info.compress_size
+        if ratio > ZIP_MAX_COMPRESSION_RATIO:
+            raise ValueError(f"ZIP member exceeds safe compression ratio: {info.filename!r}")
+    return member_path
+
+
+def extract_zip(path: Path, settings: Settings, observer: RunObserver | None = None) -> ExtractionResult:
+    started = time.perf_counter()
+    output: list[str] = []
+    methods: list[str] = []
+    failures: list[str] = []
+    supported_seen = 0
+    total_uncompressed = 0
+
+    try:
+        archive = zipfile.ZipFile(path)
+    except (OSError, zipfile.BadZipFile) as exc:
+        raise ValueError(f"Invalid ZIP attachment: {exc}") from exc
+
+    with archive, tempfile.TemporaryDirectory(prefix="idx-zip-") as temp_dir:
+        infos = archive.infolist()
+        if len(infos) > ZIP_MAX_MEMBERS:
+            raise ValueError(f"ZIP archive has too many members: {len(infos)} > {ZIP_MAX_MEMBERS}")
+
+        for index, info in enumerate(infos):
+            if info.is_dir():
+                continue
+            member_path = _validate_zip_member(info)
+            suffix = member_path.suffix.lower()
+            if suffix not in ZIP_SUPPORTED_SUFFIXES:
+                continue
+
+            supported_seen += 1
+            if supported_seen > ZIP_MAX_SUPPORTED_MEMBERS:
+                raise ValueError(
+                    f"ZIP archive has too many supported documents: {supported_seen} > {ZIP_MAX_SUPPORTED_MEMBERS}"
+                )
+            total_uncompressed += info.file_size
+            if total_uncompressed > ZIP_MAX_TOTAL_UNCOMPRESSED_BYTES:
+                raise ValueError("ZIP archive exceeds safe total uncompressed size limit")
+
+            try:
+                with archive.open(info, "r") as member_handle:
+                    payload = member_handle.read(ZIP_MAX_MEMBER_UNCOMPRESSED_BYTES + 1)
+                if len(payload) > ZIP_MAX_MEMBER_UNCOMPRESSED_BYTES:
+                    raise ValueError("member exceeded safe read limit")
+
+                safe_name = f"{index:03d}-{member_path.name}"
+                member_local = Path(temp_dir) / safe_name
+                member_local.write_bytes(payload)
+                member_content_type = mimetypes.guess_type(member_path.name)[0] or "application/octet-stream"
+                result = extract_document(member_local, member_content_type, settings, observer)
+                if result.text:
+                    output.append(f"===== ZIP MEMBER: {member_path.as_posix()} =====\n{result.text}")
+                    methods.append(result.method)
+            except Exception as exc:
+                failures.append(f"{member_path.as_posix()}: {type(exc).__name__}: {exc}")
+
+    if supported_seen == 0:
+        raise ValueError("ZIP archive contains no supported document attachments")
+    if not output:
+        details = "; ".join(failures[:3])
+        raise ValueError(f"ZIP archive contained supported documents but none could be extracted: {details}")
+
+    if observer:
+        observer.event(
+            "extract",
+            "ZIP extraction complete",
+            file=path.name,
+            supported_members=supported_seen,
+            extracted_members=len(output),
+            failed_members=len(failures),
+            uncompressed_bytes=total_uncompressed,
+            elapsed_seconds=f"{time.perf_counter() - started:.3f}",
+        )
+
+    method_set = list(dict.fromkeys(methods))
+    method = "zip[" + "+".join(method_set) + "]"
+    if failures:
+        output.append(
+            "===== ZIP EXTRACTION LIMITATIONS =====\n"
+            + "\n".join(f"- {failure}" for failure in failures[:10])
+        )
+    return ExtractionResult(normalize_text("\n\n".join(output)), method)
+
+
 def extract_document(
     path: Path,
     content_type: str,
@@ -288,6 +411,8 @@ def extract_document(
             content_type=content_type,
             bytes=path.stat().st_size if path.exists() else None,
         )
+    if suffix == ".zip" or ctype in {"application/zip", "application/x-zip-compressed"}:
+        return extract_zip(path, settings, observer)
     if suffix == ".pdf" or "application/pdf" in ctype:
         return extract_pdf(path, settings, observer)
     if suffix in {".xlsx", ".xlsm"} or "spreadsheetml" in ctype:
