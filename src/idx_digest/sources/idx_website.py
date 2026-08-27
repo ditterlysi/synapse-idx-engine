@@ -12,6 +12,7 @@ from zoneinfo import ZoneInfo
 
 from dateutil.parser import isoparse
 
+from ..attachment_selector import classify_attachments
 from ..idx_polite_http import (
     CURRENT_IDX_BASE_URL,
     OFFICIAL_IDX_HOSTS,
@@ -388,8 +389,13 @@ class IdxWebsiteSource:
         unsupported_ticker_row_ids: list[str] = []
         nonstock_product_row_ids: list[str] = []
         unavailable_attachment_row_ids: list[str] = []
+        no_selected_attachment_row_ids: list[str] = []
         attachment_downloads = 0
         attachment_cache_hits = 0
+        attachments_considered = 0
+        attachments_selected = 0
+        attachments_skipped_by_policy = 0
+        attachment_policy_skips: list[dict[str, str]] = []
         request_budget_deferred = False
         request_budget_deferred_row_id: str | None = None
         newest_at: datetime | None = None
@@ -417,11 +423,36 @@ class IdxWebsiteSource:
             attachments_raw = item.get("attachments") or []
             if not isinstance(attachments_raw, list):
                 raise IdxWebsiteSourceError(f"IDX announcement {raw_id!r} attachments must be a list")
+            valid_attachment_rows = [
+                attachment
+                for attachment in attachments_raw
+                if isinstance(attachment, dict) and attachment.get("FullSavePath")
+            ]
+            decisions = classify_attachments(title, valid_attachment_rows, policy="smart")
+            selected_attachment_rows = [decision.attachment for decision in decisions if decision.selected]
+            attachments_considered += len(decisions)
+            attachments_selected += len(selected_attachment_rows)
+            attachments_skipped_by_policy += sum(not decision.selected for decision in decisions)
+            for decision in decisions:
+                if decision.selected or len(attachment_policy_skips) >= 20:
+                    continue
+                attachment_policy_skips.append(
+                    {
+                        "rowId": raw_id,
+                        "filename": decision.filename,
+                        "category": decision.category,
+                        "reason": decision.reason,
+                    }
+                )
+
+            if valid_attachment_rows and not selected_attachment_rows:
+                if len(no_selected_attachment_row_ids) < 20:
+                    no_selected_attachment_row_ids.append(raw_id)
+                continue
+
             attachments: list[SourceAttachment] = []
             attachment_unavailable = False
-            for attachment_raw in attachments_raw:
-                if not isinstance(attachment_raw, dict) or not attachment_raw.get("FullSavePath"):
-                    continue
+            for attachment_raw in selected_attachment_rows:
                 try:
                     attachment, cache_hit = self._stage_attachment(attachment_raw)
                 except IdxRequestBudgetExceededError:
@@ -459,6 +490,8 @@ class IdxWebsiteSource:
                         "idxAnnouncementNo": str(announcement.get("NoPengumuman") or "").strip() or None,
                         "idxFormId": str(announcement.get("Form_Id") or "").strip() or None,
                         "idxCreatedDate": str(announcement.get("CreatedDate") or "").strip() or None,
+                        "idxAttachmentCountOriginal": len(valid_attachment_rows),
+                        "idxAttachmentCountSelected": len(selected_attachment_rows),
                     },
                 )
             )
@@ -512,6 +545,12 @@ class IdxWebsiteSource:
             "nonStockProductRowIds": nonstock_product_row_ids,
             "unavailableAttachmentRowsSkipped": len(unavailable_attachment_row_ids),
             "unavailableAttachmentRowIds": unavailable_attachment_row_ids,
+            "noSelectedAttachmentRowsSkipped": len(no_selected_attachment_row_ids),
+            "noSelectedAttachmentRowIds": no_selected_attachment_row_ids,
+            "attachmentsConsidered": attachments_considered,
+            "attachmentsSelected": attachments_selected,
+            "attachmentsSkippedByPolicy": attachments_skipped_by_policy,
+            "attachmentPolicySkips": attachment_policy_skips,
             "requestBudgetDeferred": request_budget_deferred,
             "requestBudgetDeferredRowId": request_budget_deferred_row_id,
             "issuerDisclosuresProcessed": len(disclosures),
