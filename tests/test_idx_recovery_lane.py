@@ -53,24 +53,26 @@ class DuplicateWidePageClient:
 
 
 def test_recovery_lane_keeps_newest_head_then_promotes_oldest_backlog():
-    candidates = _candidates(12)
+    candidates = _candidates(20)
 
     ordered, recovery_ids = _prioritize_candidates(candidates)
 
     ordered_ids = [row[0] for row in ordered]
+    assert RECOVERY_LANE_NEWEST_HEAD == 6
+    assert RECOVERY_LANE_OLDEST_SLOTS == 10
     assert ordered_ids[:RECOVERY_LANE_NEWEST_HEAD] == [
-        "row-11",
-        "row-10",
-        "row-9",
-        "row-8",
-        "row-7",
-        "row-6",
+        "row-19",
+        "row-18",
+        "row-17",
+        "row-16",
+        "row-15",
+        "row-14",
     ]
-    assert recovery_ids == ["row-0", "row-1", "row-2"]
+    assert recovery_ids == [f"row-{index}" for index in range(10)]
     assert ordered_ids[
         RECOVERY_LANE_NEWEST_HEAD : RECOVERY_LANE_NEWEST_HEAD + RECOVERY_LANE_OLDEST_SLOTS
     ] == recovery_ids
-    assert ordered_ids[-3:] == ["row-5", "row-4", "row-3"]
+    assert ordered_ids[-4:] == ["row-13", "row-12", "row-11", "row-10"]
     assert sorted(ordered_ids) == sorted(row[0] for row in candidates)
 
 
