@@ -15,6 +15,7 @@ from idx_digest.synapse_contract import CreateRunRequest, UpdateRunRequest
 
 
 RUN_ID = "11111111-1111-4111-8111-111111111111"
+OLD_RUN_ID = "22222222-2222-4222-8222-222222222222"
 
 
 def _settings(tmp_path) -> Settings:
@@ -39,6 +40,11 @@ def test_source_state_client_registers_run_and_uses_real_source_request_count(tm
     def handler(request: httpx.Request) -> httpx.Response:
         body = json.loads(request.content) if request.content else None
         requests.append((request.method, request.url.path, body))
+        if request.method == "GET" and request.url.path == "/api/internal/idx/source-state":
+            return httpx.Response(
+                200,
+                json={"sourceId": "idx-website", "latestAttempt": None, "checkpoint": None},
+            )
         if request.method == "POST" and request.url.path == "/api/internal/idx/runs":
             return httpx.Response(201, json={"runId": RUN_ID})
         if request.method == "POST" and request.url.path == "/api/internal/idx/source-state/register":
@@ -69,8 +75,67 @@ def test_source_state_client_registers_run_and_uses_real_source_request_count(tm
     finally:
         client.close()
 
-    assert requests[1][2] == {"action": "REGISTER", "runId": RUN_ID, "sourceId": "idx-website"}
-    assert requests[2][2]["sourceRequests"] == 7
+    assert requests[0][:2] == ("GET", "/api/internal/idx/source-state")
+    assert requests[2][2] == {"action": "REGISTER", "runId": RUN_ID, "sourceId": "idx-website"}
+    assert requests[3][2]["sourceRequests"] == 7
+
+
+def test_create_run_recovers_stale_source_run_before_starting_new_run(tmp_path) -> None:
+    requests: list[tuple[str, str, dict[str, object] | None]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.content) if request.content else None
+        requests.append((request.method, request.url.path, body))
+        if request.method == "GET" and request.url.path == "/api/internal/idx/source-state":
+            return httpx.Response(
+                200,
+                json={
+                    "sourceId": "idx-website",
+                    "latestAttempt": {
+                        "id": OLD_RUN_ID,
+                        "status": "RUNNING",
+                        "started_at": "2020-01-01T00:00:00Z",
+                    },
+                    "checkpoint": None,
+                },
+            )
+        if request.method == "PATCH" and request.url.path == f"/api/internal/idx/runs/{OLD_RUN_ID}":
+            return httpx.Response(
+                200,
+                json={
+                    "runId": OLD_RUN_ID,
+                    "status": "FAILED",
+                    "completedAt": body["completedAt"],
+                },
+            )
+        if request.method == "POST" and request.url.path == "/api/internal/idx/runs":
+            return httpx.Response(201, json={"runId": RUN_ID})
+        if request.method == "POST" and request.url.path == "/api/internal/idx/source-state/register":
+            return httpx.Response(200, json={"runId": RUN_ID, "sourceId": "idx-website"})
+        raise AssertionError(f"unexpected request: {request.method} {request.url}")
+
+    client = SourceStateSynapseClient(
+        _settings(tmp_path),
+        source_id="idx-website",
+        transport=httpx.MockTransport(handler),
+    )
+    try:
+        created = client.create_run(CreateRunRequest(mode="DAILY"))
+    finally:
+        client.close()
+
+    assert created.run_id == RUN_ID
+    assert [item[:2] for item in requests] == [
+        ("GET", "/api/internal/idx/source-state"),
+        ("PATCH", f"/api/internal/idx/runs/{OLD_RUN_ID}"),
+        ("POST", "/api/internal/idx/runs"),
+        ("POST", "/api/internal/idx/source-state/register"),
+    ]
+    recovery_payload = requests[1][2]
+    assert recovery_payload is not None
+    assert recovery_payload["status"] == "FAILED"
+    assert recovery_payload["errorCode"] == "STALE_RUN_RECOVERED"
+    assert recovery_payload["completedAt"]
 
 
 def test_source_state_client_reads_and_commits_checkpoint(tmp_path) -> None:
