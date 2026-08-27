@@ -22,6 +22,10 @@ class IdxRequestBudgetExceededError(IdxPoliteHttpError):
     """Raised when the configured IDX source request budget is exhausted."""
 
 
+class IdxRunTimeBudgetExceededError(IdxRequestBudgetExceededError):
+    """Raised before an IDX request would exceed the configured source run deadline."""
+
+
 class IdxAccessProtectionError(IdxPoliteHttpError):
     """Raised when IDX or an upstream protection layer asks the client to stop."""
 
@@ -52,6 +56,7 @@ class PoliteFetchClient:
         max_retries: int = 2,
         max_requests: int = 50,
         max_download_bytes_total: int = 500_000_000,
+        max_run_seconds: float | None = None,
         transport: httpx.BaseTransport | None = None,
         sleeper: Callable[[float], None] = time.sleep,
         monotonic: Callable[[], float] = time.monotonic,
@@ -67,6 +72,8 @@ class PoliteFetchClient:
             raise ValueError("max_requests must be at least 1")
         if max_download_bytes_total < 1:
             raise ValueError("max_download_bytes_total must be positive")
+        if max_run_seconds is not None and max_run_seconds <= 0:
+            raise ValueError("max_run_seconds must be positive when configured")
 
         parsed = urlparse(base_url)
         if parsed.scheme != "https" or parsed.hostname not in OFFICIAL_IDX_HOSTS:
@@ -78,9 +85,11 @@ class PoliteFetchClient:
         self.max_retries = max_retries
         self.max_requests = max_requests
         self.max_download_bytes_total = max_download_bytes_total
+        self.max_run_seconds = max_run_seconds
         self._sleeper = sleeper
         self._monotonic = monotonic
         self._random_uniform = random_uniform
+        self._started_at = self._monotonic()
         self._last_request_at: float | None = None
         self.request_count = 0
         self.downloaded_bytes = 0
@@ -114,7 +123,17 @@ class PoliteFetchClient:
         if parsed.scheme != "https" or parsed.hostname not in OFFICIAL_IDX_HOSTS:
             raise IdxPoliteHttpError(f"refusing non-IDX URL: {url!r}")
 
+    def _elapsed_run_seconds(self) -> float:
+        return max(0.0, self._monotonic() - self._started_at)
+
+    def _check_run_time_budget(self, *, additional_seconds: float = 0.0) -> None:
+        if self.max_run_seconds is None:
+            return
+        if self._elapsed_run_seconds() + max(0.0, additional_seconds) >= self.max_run_seconds:
+            raise IdxRunTimeBudgetExceededError("IDX source run time budget exceeded")
+
     def _pace(self) -> None:
+        self._check_run_time_budget()
         if self._last_request_at is None:
             return
         elapsed = max(0.0, self._monotonic() - self._last_request_at)
@@ -122,12 +141,15 @@ class PoliteFetchClient:
         if self.request_jitter_seconds:
             wait += self._random_uniform(0.0, self.request_jitter_seconds)
         if wait:
+            self._check_run_time_budget(additional_seconds=wait)
             self._sleeper(wait)
+            self._check_run_time_budget()
 
     def _request(self, method: str, url: str, **kwargs: Any) -> httpx.Response:
         self._validate_url(url if url.startswith("http") else f"{self.base_url}{url}")
         attempt = 0
         while True:
+            self._check_run_time_budget()
             if self.request_count >= self.max_requests:
                 raise IdxRequestBudgetExceededError("IDX source request budget exceeded")
             self._pace()
@@ -138,7 +160,9 @@ class PoliteFetchClient:
                 if attempt >= self.max_retries:
                     raise IdxPoliteHttpError(f"IDX transport failed after {attempt + 1} attempt(s): {exc}") from exc
                 attempt += 1
-                self._sleeper(min(2**attempt, 8))
+                retry_wait = min(2**attempt, 8)
+                self._check_run_time_budget(additional_seconds=retry_wait)
+                self._sleeper(retry_wait)
                 continue
             finally:
                 self._last_request_at = self._monotonic()
@@ -158,7 +182,9 @@ class PoliteFetchClient:
                 if attempt >= self.max_retries:
                     raise IdxPoliteHttpError(f"IDX returned HTTP {status} after {attempt + 1} attempt(s)")
                 attempt += 1
-                self._sleeper(min(2**attempt, 8))
+                retry_wait = min(2**attempt, 8)
+                self._check_run_time_budget(additional_seconds=retry_wait)
+                self._sleeper(retry_wait)
                 continue
             if 300 <= status < 400:
                 raise IdxUnexpectedResponseError(f"IDX returned redirect HTTP {status}; collector will not follow it")
