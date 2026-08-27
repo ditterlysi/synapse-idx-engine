@@ -5,6 +5,11 @@ on:
     # 20:00 UTC = 03:00 Asia/Jakarta (next calendar day).
     - cron: "0 20 * * *"
   workflow_dispatch:
+  push:
+    branches:
+      - main
+    paths:
+      - ".ops/idx-collector-kick.txt"
 
 concurrency:
   group: idx-daily-collector-production
