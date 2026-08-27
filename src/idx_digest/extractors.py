@@ -1,6 +1,6 @@
-from __future__ import annotations
+from __future__ import annotations  # noqa: I001
 
-import mimetypes  # noqa: I001
+import mimetypes
 import re
 import tempfile
 import time
