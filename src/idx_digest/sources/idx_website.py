@@ -362,6 +362,7 @@ class IdxWebsiteSource:
 
         ids_in_window: list[str] = []
         already_seen_in_window = 0
+        newest_seen_at: datetime | None = None
         candidates: list[tuple[str, dict[str, Any], datetime]] = []
         for item in metadata_items:
             announcement = item.get("pengumuman")
@@ -376,6 +377,8 @@ class IdxWebsiteSource:
             ids_in_window.append(raw_id)
             if raw_id in seen_checkpoint:
                 already_seen_in_window += 1
+                if newest_seen_at is None or announced_at > newest_seen_at:
+                    newest_seen_at = announced_at
                 continue
             candidates.append((raw_id, item, announced_at))
 
@@ -472,9 +475,20 @@ class IdxWebsiteSource:
         # Newest-first processing must not move the time watermark past older
         # candidates when a request budget is exhausted. Processed IDs are still
         # remembered individually, while the older window remains eligible for
-        # the next run.
-        if newest_at is not None and not request_budget_deferred:
-            latest_value = newest_at.isoformat()
+        # the next run. Once the backlog clears, advance to the newest completed
+        # source ID observed in this window (including IDs completed earlier).
+        if not request_budget_deferred:
+            completed_latest = newest_at
+            if newest_seen_at is not None and (completed_latest is None or newest_seen_at > completed_latest):
+                completed_latest = newest_seen_at
+            if completed_latest is not None:
+                if latest_value:
+                    previous_latest = isoparse(latest_value)
+                    if previous_latest.tzinfo is None or previous_latest.utcoffset() is None:
+                        previous_latest = previous_latest.replace(tzinfo=self.timezone)
+                    if previous_latest > completed_latest:
+                        completed_latest = previous_latest
+                latest_value = completed_latest.isoformat()
         self._pending_checkpoint = IdxWebsiteCheckpoint(tuple(merged_seen), latest_value)
 
         diagnostics = {
