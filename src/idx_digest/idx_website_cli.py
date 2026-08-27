@@ -11,7 +11,7 @@ from dateutil.parser import isoparse
 from .ai_provider import resolve_ai_provider
 from .config import Settings
 from .daily_guardrails import DailyPolicy, DailyPolicyError
-from .durable_checkpoint import MemoryCheckpointStore
+from .durable_checkpoint import SelectiveMemoryCheckpointStore
 from .idx_polite_http import CURRENT_IDX_BASE_URL, PoliteFetchClient
 from .source_ingestion import SourceIngestionRunner
 from .source_state_client import SourceStateSynapseClient, checkpoint_from_payload
@@ -153,6 +153,7 @@ def _run_collection(
 
     checkpoint_backend = "local" if checkpoint is not None else "synapse"
     checkpoint_path: Path | None = None
+    checkpoint_eligible_external_ids: set[str] = set()
     if checkpoint is not None:
         checkpoint_path = checkpoint.expanduser().resolve()
         checkpoint_store = FileCheckpointStore(checkpoint_path)
@@ -160,7 +161,10 @@ def _run_collection(
         try:
             with _source_state_client(provider_runtime.settings) as state_client:
                 remote_state = state_client.get_source_state()
-            checkpoint_store = MemoryCheckpointStore(checkpoint_from_payload(remote_state.get("checkpoint")))
+            checkpoint_store = SelectiveMemoryCheckpointStore(
+                checkpoint_from_payload(remote_state.get("checkpoint")),
+                eligible_external_ids=checkpoint_eligible_external_ids,
+            )
         except Exception as exc:
             typer.echo(
                 json.dumps(
@@ -170,6 +174,7 @@ def _run_collection(
                         "error": f"could not restore durable IDX checkpoint: {exc}",
                         "checkpointBackend": "synapse",
                         "checkpointCommitted": False,
+                        "checkpointProgressPreserved": False,
                         "scheduleEnabled": schedule_enabled,
                         "sourceNetworkAccess": False,
                     },
@@ -200,9 +205,12 @@ def _run_collection(
     )
 
     def client_factory(client_settings: Settings) -> SourceStateSynapseClient:
-        return _source_state_client(client_settings, counter=lambda: idx_client.request_count)
+        client = _source_state_client(client_settings, counter=lambda: idx_client.request_count)
+        client.checkpoint_eligible_external_ids = checkpoint_eligible_external_ids
+        return client
 
     checkpoint_committed = False
+    checkpoint_progress_preserved = False
     try:
         result = SourceIngestionRunner(
             provider_runtime.settings,
@@ -231,6 +239,10 @@ def _run_collection(
                     )
             checkpoint_committed = True
         elif checkpoint_backend == "synapse":
+            source.commit_checkpoint()
+            saved = checkpoint_store.saved
+            initial = checkpoint_store.initial
+            progress_changed = saved is not None and saved != initial
             with _source_state_client(provider_runtime.settings) as state_client:
                 state_client.commit_source_state(
                     run_id=result.run_id,
@@ -238,8 +250,12 @@ def _run_collection(
                     source_transport="http-only",
                     source_complete=result.source_complete,
                     coverage_committed=False,
-                    checkpoint=None,
+                    checkpoint=saved if progress_changed else None,
+                    checkpoint_progress_preserved=progress_changed,
                 )
+            if progress_changed:
+                checkpoint_committed = True
+                checkpoint_progress_preserved = True
     except Exception as exc:
         typer.echo(
             json.dumps(
@@ -251,6 +267,7 @@ def _run_collection(
                     "coverageAuthoritative": False,
                     "checkpointBackend": checkpoint_backend,
                     "checkpointCommitted": False,
+                    "checkpointProgressPreserved": False,
                     "scheduleEnabled": schedule_enabled,
                     "sourceNetworkAccess": idx_client.request_count > 0,
                     "sourceTransport": "http-only",
@@ -270,6 +287,7 @@ def _run_collection(
     report["sourceRequests"] = idx_client.request_count
     report["checkpointBackend"] = checkpoint_backend
     report["checkpointCommitted"] = checkpoint_committed
+    report["checkpointProgressPreserved"] = checkpoint_progress_preserved
     report["checkpointPath"] = str(checkpoint_path) if checkpoint_path is not None else None
     report["scheduleEnabled"] = schedule_enabled
     typer.echo(json.dumps(report, ensure_ascii=False, indent=2))
