@@ -179,9 +179,10 @@ def test_source_state_client_reads_and_commits_checkpoint(tmp_path) -> None:
     assert restored == checkpoint
     assert committed["processingOk"] is True
     assert committed["checkpoint"]["seenIds"] == ["IDX-1"]
+    assert committed["checkpointProgressPreserved"] is False
 
 
-def test_failed_processing_cannot_advance_checkpoint(tmp_path) -> None:
+def test_failed_processing_cannot_advance_checkpoint_without_explicit_progress_flag(tmp_path) -> None:
     client = SourceStateSynapseClient(
         _settings(tmp_path),
         source_id="idx-website",
@@ -198,8 +199,70 @@ def test_failed_processing_cannot_advance_checkpoint(tmp_path) -> None:
                 checkpoint=IdxWebsiteCheckpoint(("IDX-1",), None),
             )
         except ValueError as exc:
-            assert "must not advance" in str(exc)
+            assert "explicitly preserved" in str(exc)
         else:
             raise AssertionError("expected ValueError")
+    finally:
+        client.close()
+
+
+def test_failed_processing_can_preserve_explicit_completed_checkpoint_progress(tmp_path) -> None:
+    committed: dict[str, object] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "POST" and request.url.path == "/api/internal/idx/source-state/commit":
+            committed.update(json.loads(request.content))
+            return httpx.Response(200, json={"runId": RUN_ID, "sourceId": "idx-website"})
+        raise AssertionError(f"unexpected request: {request.method} {request.url}")
+
+    client = SourceStateSynapseClient(
+        _settings(tmp_path),
+        source_id="idx-website",
+        transport=httpx.MockTransport(handler),
+    )
+    try:
+        client.commit_source_state(
+            run_id=RUN_ID,
+            processing_ok=False,
+            source_transport="http-only",
+            source_complete=False,
+            coverage_committed=False,
+            checkpoint=IdxWebsiteCheckpoint(("IDX-READY",), "2026-08-21T22:10:47+07:00"),
+            checkpoint_progress_preserved=True,
+        )
+    finally:
+        client.close()
+
+    assert committed["processingOk"] is False
+    assert committed["coverageCommitted"] is False
+    assert committed["checkpointProgressPreserved"] is True
+    assert committed["checkpoint"]["seenIds"] == ["IDX-READY"]
+
+
+def test_partial_checkpoint_progress_rejects_invalid_combinations(tmp_path) -> None:
+    client = SourceStateSynapseClient(
+        _settings(tmp_path),
+        source_id="idx-website",
+        transport=httpx.MockTransport(lambda request: httpx.Response(500)),
+    )
+    try:
+        invalid = (
+            dict(processing_ok=True, coverage_committed=False, checkpoint=IdxWebsiteCheckpoint(("IDX-1",), None)),
+            dict(processing_ok=False, coverage_committed=False, checkpoint=None),
+            dict(processing_ok=False, coverage_committed=True, checkpoint=IdxWebsiteCheckpoint(("IDX-1",), None)),
+        )
+        for case in invalid:
+            try:
+                client.commit_source_state(
+                    run_id=RUN_ID,
+                    source_transport="http-only",
+                    source_complete=False,
+                    checkpoint_progress_preserved=True,
+                    **case,
+                )
+            except ValueError:
+                pass
+            else:
+                raise AssertionError(f"expected ValueError for {case!r}")
     finally:
         client.close()
