@@ -145,9 +145,18 @@ class SourceStateSynapseClient(SynapseClient):
         source_complete: bool,
         coverage_committed: bool,
         checkpoint: IdxWebsiteCheckpoint | None,
+        checkpoint_progress_preserved: bool = False,
     ) -> dict[str, Any]:
-        if not processing_ok and checkpoint is not None:
-            raise ValueError("failed processing must not advance the source checkpoint")
+        if checkpoint_progress_preserved:
+            if processing_ok:
+                raise ValueError("partial checkpoint progress requires failed processing")
+            if checkpoint is None:
+                raise ValueError("partial checkpoint progress requires a checkpoint")
+            if coverage_committed:
+                raise ValueError("partial checkpoint progress cannot commit authoritative coverage")
+        elif not processing_ok and checkpoint is not None:
+            raise ValueError("failed processing may checkpoint only explicitly preserved completed progress")
+
         payload: dict[str, object] = {
             "action": "COMMIT",
             "runId": run_id,
@@ -157,5 +166,6 @@ class SourceStateSynapseClient(SynapseClient):
             "sourceComplete": source_complete,
             "coverageCommitted": coverage_committed,
             "checkpoint": checkpoint_payload(checkpoint) if checkpoint is not None else None,
+            "checkpointProgressPreserved": checkpoint_progress_preserved,
         }
         return self._request_without_model("POST", "/api/internal/idx/source-state/commit", payload)
