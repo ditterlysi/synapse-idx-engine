@@ -189,4 +189,27 @@ class SourceStateSynapseClient(SynapseClient):
             "checkpoint": checkpoint_payload(checkpoint) if checkpoint is not None else None,
             "checkpointProgressPreserved": checkpoint_progress_preserved,
         }
-        return self._request_without_model("POST", "/api/internal/idx/source-state/commit", payload)
+        try:
+            return self._request_without_model("POST", "/api/internal/idx/source-state/commit", payload)
+        except httpx.HTTPStatusError as exc:
+            # The production Synapse Worker can briefly lag the engine deploy.
+            # An older strict contract does not know checkpointProgressPreserved.
+            # Fail closed by dropping only the partial checkpoint rather than
+            # turning a successfully finalized PARTIAL run into another stale run.
+            if not checkpoint_progress_preserved or exc.response.status_code != 400:
+                raise
+            legacy_payload: dict[str, object] = {
+                "action": "COMMIT",
+                "runId": run_id,
+                "sourceId": self.source_id,
+                "processingOk": False,
+                "sourceTransport": source_transport,
+                "sourceComplete": source_complete,
+                "coverageCommitted": False,
+                "checkpoint": None,
+            }
+            return self._request_without_model(
+                "POST",
+                "/api/internal/idx/source-state/commit",
+                legacy_payload,
+            )
