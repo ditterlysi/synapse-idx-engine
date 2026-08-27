@@ -79,7 +79,7 @@ class Settings(BaseSettings):
     synapse_daily_transport: str = "http"
     synapse_daily_request_delay_seconds: float = Field(default=1.5, ge=0.5, le=30.0)
     synapse_daily_request_jitter_seconds: float = Field(default=0.35, ge=0.0, le=5.0)
-    synapse_daily_max_source_requests: int = Field(default=50, ge=1, le=500)
+    synapse_daily_max_source_requests: int = Field(default=100, ge=1, le=500)
     synapse_daily_max_attachments: int = Field(default=100, ge=1, le=1000)
     synapse_daily_max_download_bytes: int = Field(default=500_000_000, ge=1_000_000)
     synapse_daily_max_ai_documents: int = Field(default=100, ge=1, le=1000)
