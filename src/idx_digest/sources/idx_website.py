@@ -391,7 +391,7 @@ class IdxWebsiteSource:
         request_budget_deferred_row_id: str | None = None
         newest_at: datetime | None = None
 
-        for raw_id, item, announced_at in sorted(candidates, key=lambda row: row[2]):
+        for raw_id, item, announced_at in sorted(candidates, key=lambda row: row[2], reverse=True):
             announcement = item.get("pengumuman") or {}
             ticker = str(announcement.get("Kode_Emiten") or "").strip().upper()
             if not ticker:
