@@ -10,7 +10,12 @@ import httpx
 from .config import Settings
 from .sources.idx_website import CHECKPOINT_SCHEMA, IdxWebsiteCheckpoint
 from .synapse_client import SynapseClient
-from .synapse_contract import CreateRunRequest, CreateRunResponse, UpdateRunRequest, UpdateRunResponse
+from .synapse_contract import (
+    CreateRunRequest,
+    CreateRunResponse,
+    UpdateRunRequest,
+    UpdateRunResponse,
+)
 
 
 STALE_SOURCE_RUN_AGE = timedelta(hours=2)
