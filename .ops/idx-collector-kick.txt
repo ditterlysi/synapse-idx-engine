@@ -1,2 +1,2 @@
-2026-08-27T07:34:00+07:00
-reason=production verification after request-budget, newest-first, timeout, and checkpoint hardening
+2026-08-27T07:40:20+07:00
+reason=queue production verification on runtime-deadline hardening after CI success
