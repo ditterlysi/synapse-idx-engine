@@ -29,7 +29,7 @@ IDX_DISCLOSURE_PAGE = f"{CURRENT_IDX_BASE_URL}/id/perusahaan-tercatat/keterbukaa
 CHECKPOINT_SCHEMA = "synapse-idx-website-checkpoint-v1"
 MAX_WINDOW = timedelta(hours=48)
 RECOVERY_LANE_NEWEST_HEAD = 6
-RECOVERY_LANE_OLDEST_SLOTS = 3
+RECOVERY_LANE_OLDEST_SLOTS = 10
 NON_STOCK_PRODUCT_FLAGS = (
     "EfekEmiten_ETF",
     "EfekEmiten_DIRE",
@@ -149,7 +149,7 @@ def _prioritize_candidates(
     """Keep newest-first service while reserving deterministic backlog retries.
 
     The first few newest disclosures remain the real-time priority. When there is
-    a deeper backlog, a small set of the oldest uncheckpointed candidates is then
+    a deeper backlog, a bounded set of the oldest uncheckpointed candidates is
     promoted ahead of the remaining newest-first queue so a full request budget
     cannot starve the same old disclosures forever.
     """
