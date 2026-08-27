@@ -299,18 +299,22 @@ class IdxWebsiteSource:
                 page_size=probe_size,
             )
             pages_fetched += 1
+            probe_raw_rows = len(probe_page)
             probe_items = _dedupe_items(probe_page)
             effective_total = probe_total if probe_total is not None else reported_total
-            if effective_total is not None and len(probe_items) < effective_total:
+            if effective_total is not None and probe_raw_rows < effective_total:
                 raise IdxWebsiteSourceError(
                     "IDX metadata wide-page probe remained incomplete: "
-                    f"collected {len(probe_items)} of {effective_total} reported rows; collector stopped"
+                    f"received {probe_raw_rows} raw rows ({len(probe_items)} unique) of "
+                    f"{effective_total} reported rows; collector stopped"
                 )
             return probe_items, {
                 "pagesFetched": pages_fetched,
                 "reportedTotal": effective_total,
                 "paginationStrategy": "wide-page-probe",
                 "widePageProbeSize": probe_size,
+                "metadataRowsRaw": probe_raw_rows,
+                "metadataDuplicateRowsCollapsed": max(0, probe_raw_rows - len(probe_items)),
                 "metadataRowsCollected": len(probe_items),
             }
 
@@ -598,6 +602,10 @@ class IdxWebsiteSource:
         }
         if "widePageProbeSize" in pagination:
             diagnostics["widePageProbeSize"] = pagination["widePageProbeSize"]
+        if "metadataRowsRaw" in pagination:
+            diagnostics["metadataRowsRaw"] = pagination["metadataRowsRaw"]
+        if "metadataDuplicateRowsCollapsed" in pagination:
+            diagnostics["metadataDuplicateRowsCollapsed"] = pagination["metadataDuplicateRowsCollapsed"]
 
         return SourceWindowResult(
             source_id=self.source_id,
