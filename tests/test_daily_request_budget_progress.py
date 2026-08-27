@@ -115,17 +115,19 @@ def test_source_preserves_completed_progress_when_attachment_budget_exhausts(tmp
     )
     first_result = first_source.collect_window(start_at=start_at, end_at=end_at)
 
-    assert [item.external_id for item in first_result.disclosures] == [f"idx-web-{first_id}"]
+    # Under a constrained source budget, the newest disclosure is completed first.
+    assert [item.external_id for item in first_result.disclosures] == [f"idx-web-{second_id}"]
     assert first_result.diagnostics["sourceRequests"] == 2
     assert first_result.diagnostics["requestBudgetDeferred"] is True
-    assert first_result.diagnostics["requestBudgetDeferredRowId"] == second_id
+    assert first_result.diagnostics["requestBudgetDeferredRowId"] == first_id
     assert checkpoint_path.exists() is False
 
     first_source.commit_checkpoint()
     first_checkpoint = json.loads(checkpoint_path.read_text(encoding="utf-8"))
-    assert first_checkpoint["seenIds"] == [first_id]
-    assert first_checkpoint["latestAnnouncedAt"].startswith("2026-08-24T10:00:00")
-    assert second_id not in first_checkpoint["seenIds"]
+    assert first_checkpoint["seenIds"] == [second_id]
+    # Hold the time watermark while older work is deferred so it remains eligible.
+    assert first_checkpoint["latestAnnouncedAt"] is None
+    assert first_id not in first_checkpoint["seenIds"]
 
     second_client = BudgetedFakeClient(payload, max_requests=2)
     second_source = IdxWebsiteSource(
@@ -135,12 +137,13 @@ def test_source_preserves_completed_progress_when_attachment_budget_exhausts(tmp
     )
     second_result = second_source.collect_window(start_at=start_at, end_at=end_at)
 
-    assert [item.external_id for item in second_result.disclosures] == [f"idx-web-{second_id}"]
+    assert [item.external_id for item in second_result.disclosures] == [f"idx-web-{first_id}"]
     assert second_result.diagnostics["alreadySeenInRequestedWindow"] == 1
     assert second_result.diagnostics["requestBudgetDeferred"] is False
     assert second_result.diagnostics["requestBudgetDeferredRowId"] is None
 
     second_source.commit_checkpoint()
     second_checkpoint = json.loads(checkpoint_path.read_text(encoding="utf-8"))
-    assert second_checkpoint["seenIds"] == [first_id, second_id]
+    assert second_checkpoint["seenIds"] == [second_id, first_id]
+    # Once backlog clears, advance to the newest completed ID observed in-window.
     assert second_checkpoint["latestAnnouncedAt"].startswith("2026-08-24T11:00:00")
