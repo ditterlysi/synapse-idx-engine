@@ -1,2 +1,2 @@
-2026-08-27T12:03:00+07:00
-reason=verify smart financial attachment selection, Gemini deadline, and partial checkpoint preservation after run 12 timeout
+2026-08-27T16:56:00+07:00
+reason=verify newest-first backlog recovery lane after PR 43; check CBUT, AKKU, and remaining DISCOVERED/PARTIAL/EXTRACTING rows
