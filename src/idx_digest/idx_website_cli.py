@@ -188,6 +188,7 @@ def _run_collection(
         max_retries=2,
         max_requests=runtime_settings.synapse_daily_max_source_requests,
         max_download_bytes_total=runtime_settings.synapse_daily_max_download_bytes,
+        max_run_seconds=runtime_settings.synapse_daily_max_run_seconds,
     )
     source = IdxWebsiteSource(
         idx_client,
