@@ -1,2 +1,2 @@
-2026-08-27T07:40:20+07:00
-reason=queue production verification on runtime-deadline hardening after CI success
+2026-08-27T10:07:30+07:00
+reason=verify safe IDX ZIP extraction and checkpoint recovery after run 11 partial
