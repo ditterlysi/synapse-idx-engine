@@ -11,8 +11,12 @@ from .config import Settings
 from .sources.idx_website import CHECKPOINT_SCHEMA, IdxWebsiteCheckpoint
 from .synapse_client import SynapseClient
 from .synapse_contract import (
+    CommitAnalysisRequest,
+    CommitAnalysisResponse,
     CreateRunRequest,
     CreateRunResponse,
+    DisclosureUpsertRequest,
+    DisclosureUpsertResponse,
     UpdateRunRequest,
     UpdateRunResponse,
 )
@@ -77,6 +81,8 @@ class SourceStateSynapseClient(SynapseClient):
         super().__init__(settings, transport=transport)
         self.source_id = source_id
         self.source_request_counter = source_request_counter
+        self.checkpoint_eligible_external_ids: set[str] = set()
+        self._external_id_by_disclosure_id: dict[str, str] = {}
 
     def _request_without_model(
         self,
@@ -129,6 +135,21 @@ class SourceStateSynapseClient(SynapseClient):
             "/api/internal/idx/source-state/register",
             {"action": "REGISTER", "runId": response.run_id, "sourceId": self.source_id},
         )
+        return response
+
+    def upsert_disclosures(self, request: DisclosureUpsertRequest) -> DisclosureUpsertResponse:
+        response = super().upsert_disclosures(request)
+        for item in response.items:
+            self._external_id_by_disclosure_id[item.disclosure_id] = item.idx_announcement_id
+            if item.processing_status == "READY":
+                self.checkpoint_eligible_external_ids.add(item.idx_announcement_id)
+        return response
+
+    def commit_analysis(self, disclosure_id: str, request: CommitAnalysisRequest) -> CommitAnalysisResponse:
+        response = super().commit_analysis(disclosure_id, request)
+        external_id = self._external_id_by_disclosure_id.get(disclosure_id)
+        if external_id:
+            self.checkpoint_eligible_external_ids.add(external_id)
         return response
 
     def update_run(self, run_id: str, request: UpdateRunRequest) -> UpdateRunResponse:
