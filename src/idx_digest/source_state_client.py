@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 from urllib.parse import quote
 
@@ -13,8 +13,24 @@ from .synapse_client import SynapseClient
 from .synapse_contract import CreateRunRequest, CreateRunResponse, UpdateRunRequest, UpdateRunResponse
 
 
+STALE_SOURCE_RUN_AGE = timedelta(hours=2)
+
+
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+def _parse_timestamp(value: object) -> datetime | None:
+    if not isinstance(value, str) or not value.strip():
+        return None
+    candidate = value.strip().replace("Z", "+00:00")
+    try:
+        parsed = datetime.fromisoformat(candidate)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None or parsed.utcoffset() is None:
+        return None
+    return parsed.astimezone(timezone.utc)
 
 
 def checkpoint_from_payload(payload: object) -> IdxWebsiteCheckpoint:
@@ -74,7 +90,34 @@ class SourceStateSynapseClient(SynapseClient):
         source_id = quote(self.source_id, safe="")
         return self._request_without_model("GET", f"/api/internal/idx/source-state?sourceId={source_id}")
 
+    def _recover_stale_source_run(self) -> None:
+        state = self.get_source_state()
+        latest = state.get("latestAttempt")
+        if not isinstance(latest, dict) or latest.get("status") != "RUNNING":
+            return
+
+        run_id = latest.get("id")
+        started_at = _parse_timestamp(latest.get("started_at") or latest.get("startedAt"))
+        if not isinstance(run_id, str) or not run_id or started_at is None:
+            return
+        if datetime.now(timezone.utc) - started_at <= STALE_SOURCE_RUN_AGE:
+            return
+
+        super().update_run(
+            run_id,
+            UpdateRunRequest(
+                status="FAILED",
+                completed_at=_now_iso(),
+                error_code="STALE_RUN_RECOVERED",
+                error_message=(
+                    "Previous IDX source run exceeded the collector execution window and was "
+                    "recovered by the next collector before a new run started."
+                ),
+            ),
+        )
+
     def create_run(self, request: CreateRunRequest) -> CreateRunResponse:
+        self._recover_stale_source_run()
         response = super().create_run(request)
         self._request_without_model(
             "POST",
