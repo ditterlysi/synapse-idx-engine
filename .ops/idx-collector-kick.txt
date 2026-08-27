@@ -1,2 +1,2 @@
-2026-08-27T17:04:00+07:00
-reason=reverify metadata duplicate-row completeness plus newest-first backlog recovery lane; check CBUT, AKKU, and remaining backlog
+2026-08-27T19:16:00+07:00
+reason=verify 10-slot IDX backlog recovery throughput after run 15; confirm old backlog drain and CBUT recovery rank progress
