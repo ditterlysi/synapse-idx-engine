@@ -186,7 +186,7 @@ def _run_collection(
         request_delay_seconds=runtime_settings.synapse_daily_request_delay_seconds,
         request_jitter_seconds=runtime_settings.synapse_daily_request_jitter_seconds,
         max_retries=2,
-        max_requests=min(runtime_settings.synapse_daily_max_source_requests, 50),
+        max_requests=runtime_settings.synapse_daily_max_source_requests,
         max_download_bytes_total=runtime_settings.synapse_daily_max_download_bytes,
     )
     source = IdxWebsiteSource(
