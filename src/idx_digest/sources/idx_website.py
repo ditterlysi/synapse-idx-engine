@@ -469,7 +469,11 @@ class IdxWebsiteSource:
         # without failing the whole window, and never added to checkpoint state.
         merged_seen = list(dict.fromkeys([*checkpoint.seen_ids, *processed_ids]))
         latest_value = checkpoint.latest_announced_at
-        if newest_at is not None:
+        # Newest-first processing must not move the time watermark past older
+        # candidates when a request budget is exhausted. Processed IDs are still
+        # remembered individually, while the older window remains eligible for
+        # the next run.
+        if newest_at is not None and not request_budget_deferred:
             latest_value = newest_at.isoformat()
         self._pending_checkpoint = IdxWebsiteCheckpoint(tuple(merged_seen), latest_value)
 
