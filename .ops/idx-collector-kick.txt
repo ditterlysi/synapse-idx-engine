@@ -1,2 +1,2 @@
-2026-08-27T10:07:30+07:00
-reason=verify safe IDX ZIP extraction and checkpoint recovery after run 11 partial
+2026-08-27T12:03:00+07:00
+reason=verify smart financial attachment selection, Gemini deadline, and partial checkpoint preservation after run 12 timeout
