@@ -22,7 +22,7 @@ from .synapse_contract import (
 )
 
 
-STALE_SOURCE_RUN_AGE = timedelta(hours=2)
+STALE_SOURCE_RUN_AGE = timedelta(minutes=95)
 
 
 def _now_iso() -> str:
