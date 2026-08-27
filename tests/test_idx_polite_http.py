@@ -8,6 +8,7 @@ import pytest
 from idx_digest.idx_polite_http import (
     IdxAccessProtectionError,
     IdxResourceNotFoundError,
+    IdxRunTimeBudgetExceededError,
     PoliteFetchClient,
 )
 
@@ -104,3 +105,31 @@ def test_polite_client_maps_404_to_resource_not_found():
             )
 
     assert calls == 1
+
+
+def test_polite_client_stops_before_source_runtime_deadline():
+    calls = 0
+    ticks = iter([0.0, 2.0])
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        return httpx.Response(
+            200,
+            headers={"content-type": "application/json"},
+            json={"Replies": [], "ResultCount": 0},
+            request=request,
+        )
+
+    with PoliteFetchClient(
+        request_delay_seconds=0,
+        request_jitter_seconds=0,
+        max_run_seconds=1,
+        transport=httpx.MockTransport(handler),
+        sleeper=lambda _seconds: None,
+        monotonic=lambda: next(ticks),
+    ) as client:
+        with pytest.raises(IdxRunTimeBudgetExceededError, match="time budget"):
+            client.get_json("/primary/ListedCompany/GetAnnouncement", params={})
+
+    assert calls == 0
