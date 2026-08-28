@@ -1,2 +1,2 @@
-2026-08-27T19:16:00+07:00
-reason=verify 10-slot IDX backlog recovery throughput after run 15; confirm old backlog drain and CBUT recovery rank progress
+2026-08-28T07:12:00+07:00
+reason=verify Cloudflare fallback hard deadline, stale-run recovery, 10-slot backlog lane, and clean collector finalization before GitHub timeout
