@@ -1,2 +1,2 @@
-2026-08-28T07:12:00+07:00
-reason=verify Cloudflare fallback hard deadline, stale-run recovery, 10-slot backlog lane, and clean collector finalization before GitHub timeout
+2026-08-28T13:42:00+07:00
+reason=verify Cloudflare provider-gate deadlock fix after PR 47; confirm fallback exits cleanly without leaking active provider slots or reaching GitHub job timeout
