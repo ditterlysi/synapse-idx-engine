@@ -354,8 +354,7 @@ class FakeRateLimitSummarizer(FakeSummarizer):
         raise FakeRateLimitError("Gemini rate limited after provider cooldown")
 
 
-def test_ai_rate_limit_trips_run_circuit_breaker(tmp_path) -> None:
-    settings = _settings(tmp_path)
+def _two_disclosure_window(tmp_path) -> SourceWindowResult:
     base = _window(tmp_path)
     second_path = tmp_path / "disclosure-2.txt"
     second_path.write_text("Second synthetic disclosure body", encoding="utf-8")
@@ -373,14 +372,18 @@ def test_ai_rate_limit_trips_run_circuit_breaker(tmp_path) -> None:
             ),
         ),
     )
-    result_window = SourceWindowResult(
+    return SourceWindowResult(
         source_id=base.source_id,
         requested_start=base.requested_start,
         requested_end=base.requested_end,
         disclosures=(base.disclosures[0], second),
         diagnostics=base.diagnostics,
     )
-    source = FakeSource(result_window)
+
+
+def test_ai_rate_limit_trips_run_circuit_breaker(tmp_path) -> None:
+    settings = _settings(tmp_path)
+    source = FakeSource(_two_disclosure_window(tmp_path))
     FakeRateLimitSummarizer.announcement_calls = 0
 
     result = _runner(
@@ -401,3 +404,40 @@ def test_ai_rate_limit_trips_run_circuit_breaker(tmp_path) -> None:
     assert FakeRateLimitSummarizer.announcement_calls == 1
     assert client.final_run_status == "PARTIAL"
     assert client.final_error_code == "AI_RATE_LIMITED"
+
+
+class FakeRunDeadlineError(ValueError):
+    run_deadline_exceeded = True
+
+
+class FakeRunDeadlineSummarizer(FakeSummarizer):
+    announcement_calls = 0
+
+    def summarize_announcement(self, *, announcement, documents, stream=False):
+        type(self).announcement_calls += 1
+        raise FakeRunDeadlineError("daily AI analysis deadline reached")
+
+
+def test_ai_run_deadline_defers_remaining_disclosures(tmp_path) -> None:
+    settings = _settings(tmp_path)
+    source = FakeSource(_two_disclosure_window(tmp_path))
+    FakeRunDeadlineSummarizer.announcement_calls = 0
+
+    result = _runner(
+        settings,
+        source,
+        summarizer_factory=FakeRunDeadlineSummarizer,
+    ).run_window(
+        start_at=source.result.requested_start,
+        end_at=source.result.requested_end,
+    )
+    client = FakeClient.latest
+    assert client is not None
+
+    assert result.processing_ok is False
+    assert result.publish.partial_disclosures == 2
+    assert result.publish.ai_run_deadline_deferred == 1
+    assert result.publish.files_extracted == 1
+    assert FakeRunDeadlineSummarizer.announcement_calls == 1
+    assert client.final_run_status == "PARTIAL"
+    assert client.final_error_code == "AI_RUN_DEADLINE"
