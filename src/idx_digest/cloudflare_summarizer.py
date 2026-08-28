@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import time
 import typing
 
 import httpx
@@ -10,6 +11,9 @@ from .summarizer import OpenRouterSummarizer
 from .summary_schemas import SummaryError
 
 CLOUDFLARE_PROVIDER = "cloudflare-workers-ai"
+_DAILY_AI_SESSION_MAX_SECONDS = 2400.0
+_DAILY_AI_REQUEST_MAX_SECONDS = 90.0
+_DAILY_AI_DEADLINE_FLOOR_SECONDS = 1.0
 
 
 class CloudflareProviderError(ValueError):
@@ -25,6 +29,13 @@ class CloudflareRateLimitError(CloudflareProviderError):
 
     def __init__(self, message: str) -> None:
         super().__init__(message, status_code=429)
+
+
+class CloudflareRunDeadlineError(ValueError):
+    """Intentional daily-run deadline, not a provider outage worth retrying."""
+
+    run_deadline_exceeded = True
+    retryable_provider_failure = False
 
 
 def build_cloudflare_request(payload: dict[str, typing.Any]) -> dict[str, typing.Any]:
@@ -86,6 +97,37 @@ class CloudflareWorkersAISummarizer(OpenRouterSummarizer):
         super().__init__(shim, client=client, observer=observer)
         self.api_model = model
         self.model = f"{model}@{CLOUDFLARE_PROVIDER}"
+        self._run_deadline_at: float | None = None
+        if settings.synapse_daily_enabled:
+            self._run_deadline_at = time.monotonic() + min(
+                _DAILY_AI_SESSION_MAX_SECONDS,
+                max(60.0, float(settings.synapse_daily_max_run_seconds) / 2.0),
+            )
+
+    def _remaining_run_seconds(self) -> float | None:
+        deadline = getattr(self, "_run_deadline_at", None)
+        if deadline is None:
+            return None
+        remaining = deadline - time.monotonic()
+        if remaining <= _DAILY_AI_DEADLINE_FLOOR_SECONDS:
+            raise CloudflareRunDeadlineError(
+                "daily Cloudflare analysis deadline reached; remaining disclosures are deferred"
+            )
+        return remaining
+
+    def _request_timeout_seconds(self) -> float | None:
+        remaining = self._remaining_run_seconds()
+        if remaining is None:
+            return None
+        timeout_seconds = min(
+            _DAILY_AI_REQUEST_MAX_SECONDS,
+            remaining - _DAILY_AI_DEADLINE_FLOOR_SECONDS,
+        )
+        if timeout_seconds <= _DAILY_AI_DEADLINE_FLOOR_SECONDS:
+            raise CloudflareRunDeadlineError(
+                "daily Cloudflare analysis deadline reached before a new request could start"
+            )
+        return timeout_seconds
 
     def _request_non_streaming(
         self, payload: dict[str, typing.Any]
@@ -94,8 +136,27 @@ class CloudflareWorkersAISummarizer(OpenRouterSummarizer):
         # Never trust a caller-provided model value at this transport boundary.
         # The configured Cloudflare-hosted model is pinned for every fallback call.
         request["model"] = self.api_model
+        timeout_seconds = self._request_timeout_seconds()
         try:
-            response = self.client.post("chat/completions", json=request)
+            if timeout_seconds is None:
+                response = self.client.post("chat/completions", json=request)
+            else:
+                response = self.client.post(
+                    "chat/completions",
+                    json=request,
+                    timeout=httpx.Timeout(
+                        timeout_seconds,
+                        connect=min(20.0, timeout_seconds),
+                    ),
+                )
+        except httpx.TimeoutException as exc:
+            try:
+                self._remaining_run_seconds()
+            except CloudflareRunDeadlineError as deadline_exc:
+                raise deadline_exc from exc
+            raise CloudflareProviderError(
+                f"Cloudflare Workers AI request timed out: {exc}"
+            ) from exc
         except httpx.HTTPError as exc:
             raise CloudflareProviderError(
                 f"Cloudflare Workers AI network failure: {exc}"

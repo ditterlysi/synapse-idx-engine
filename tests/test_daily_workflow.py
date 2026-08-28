@@ -4,7 +4,7 @@ from pathlib import Path
 def test_daily_workflow_keeps_production_guardrails() -> None:
     workflow = Path(".github/workflows/daily.yml").read_text(encoding="utf-8")
 
-    assert 'cron: "0 20 * * *"' in workflow
+    assert 'cron: "7 20 * * *"' in workflow
     assert "workflow_dispatch:" in workflow
     assert "vars.IDX_DAILY_ENABLED == 'true'" in workflow
     assert "SYNAPSE_DAILY_ENABLED: \"true\"" in workflow
