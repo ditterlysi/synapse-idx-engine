@@ -1,2 +1,2 @@
-2026-08-28T13:42:00+07:00
-reason=verify Cloudflare provider-gate deadlock fix after PR 47; confirm fallback exits cleanly without leaking active provider slots or reaching GitHub job timeout
+2026-08-28T14:26:12+07:00
+reason=verify PR 48 Gemini provider-gate slot release and AI run-deadline circuit breaker; remaining unresolved disclosures must defer cleanly and preserve partial checkpoint progress instead of hanging until GitHub timeout
