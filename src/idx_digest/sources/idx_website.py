@@ -102,6 +102,21 @@ def _announcement_time(value: object, timezone: ZoneInfo) -> datetime:
     return parsed
 
 
+def _announcement_title(announcement: dict[str, Any], ticker: str) -> tuple[str, str]:
+    """Return a bounded title even when IDX omits JudulPengumuman.
+
+    IDX occasionally emits otherwise valid issuer rows with an empty primary title.
+    A missing display field must not abort the entire daily window, so prefer other
+    official announcement fields before using a deterministic synthetic label.
+    """
+
+    for field in ("JudulPengumuman", "PerihalPengumuman", "JenisPengumuman"):
+        value = str(announcement.get(field) or "").strip()
+        if value:
+            return value, field
+    return f"IDX disclosure {ticker}", "synthetic"
+
+
 def _official_attachment_url(base_url: str, value: object) -> str:
     if not isinstance(value, str) or not value.strip():
         raise IdxWebsiteSourceError("IDX attachment is missing FullSavePath")
@@ -425,6 +440,8 @@ class IdxWebsiteSource:
         nonstock_product_row_ids: list[str] = []
         unavailable_attachment_row_ids: list[str] = []
         no_selected_attachment_row_ids: list[str] = []
+        title_fallback_count = 0
+        title_fallback_details: list[dict[str, str]] = []
         attachment_downloads = 0
         attachment_cache_hits = 0
         attachments_considered = 0
@@ -451,9 +468,13 @@ class IdxWebsiteSource:
                     nonstock_product_row_ids.append(raw_id)
                 continue
 
-            title = str(announcement.get("JudulPengumuman") or "").strip()
-            if not title:
-                raise IdxWebsiteSourceError(f"IDX issuer announcement {raw_id!r} is missing title")
+            title, title_source = _announcement_title(announcement, ticker)
+            if title_source != "JudulPengumuman":
+                title_fallback_count += 1
+                if len(title_fallback_details) < 20:
+                    title_fallback_details.append(
+                        {"rowId": raw_id, "ticker": ticker, "source": title_source}
+                    )
 
             attachments_raw = item.get("attachments") or []
             if not isinstance(attachments_raw, list):
@@ -525,6 +546,7 @@ class IdxWebsiteSource:
                         "idxAnnouncementNo": str(announcement.get("NoPengumuman") or "").strip() or None,
                         "idxFormId": str(announcement.get("Form_Id") or "").strip() or None,
                         "idxCreatedDate": str(announcement.get("CreatedDate") or "").strip() or None,
+                        "idxTitleSource": title_source,
                         "idxAttachmentCountOriginal": len(valid_attachment_rows),
                         "idxAttachmentCountSelected": len(selected_attachment_rows),
                     },
@@ -586,6 +608,8 @@ class IdxWebsiteSource:
             "unavailableAttachmentRowIds": unavailable_attachment_row_ids,
             "noSelectedAttachmentRowsSkipped": len(no_selected_attachment_row_ids),
             "noSelectedAttachmentRowIds": no_selected_attachment_row_ids,
+            "titleFallbackRows": title_fallback_count,
+            "titleFallbackDetails": title_fallback_details,
             "attachmentsConsidered": attachments_considered,
             "attachmentsSelected": attachments_selected,
             "attachmentsSkippedByPolicy": attachments_skipped_by_policy,
