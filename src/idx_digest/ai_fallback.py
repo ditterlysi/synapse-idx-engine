@@ -11,6 +11,7 @@ from .cloudflare_summarizer import CLOUDFLARE_PROVIDER, CloudflareWorkersAISumma
 from .config import Settings
 from .gemini_summarizer import GeminiRateLimitError, GeminiSummarizer
 from .observability import RunObserver
+from .provider_gate import ProviderLease
 from .summary_schemas import SummaryError
 
 _LOGGER = logging.getLogger(__name__)
@@ -38,6 +39,57 @@ def is_retryable_provider_failure(error: BaseException) -> bool:
 
 class FallbackAwareGeminiSummarizer(GeminiSummarizer):
     """Gemini adapter that types transport/provider outages without reclassifying quality errors."""
+
+    def _completion_once(
+        self,
+        user_prompt: str,
+        *,
+        schema_name: str,
+        schema: dict[str, Any],
+        max_tokens: int,
+        stream: bool | None = None,
+        audit_context: dict[str, Any] | None = None,
+        attempt: int = 1,
+    ) -> dict[str, Any]:
+        """Release a primary Gemini slot before a typed fallback failure escapes.
+
+        FallbackAwareGeminiSummarizer converts transport errors into
+        RetryableAIProviderError so the outer sticky fallback can switch providers.
+        That ValueError is raised after the base completion path acquired a provider
+        lease, but it intentionally bypasses the generic structured-output retry
+        handling. Release the slot here so multi-chunk documents cannot strand every
+        Gemini slot while the outer fallback waits for all chunk futures to finish.
+        """
+
+        try:
+            return super()._completion_once(
+                user_prompt,
+                schema_name=schema_name,
+                schema=schema,
+                max_tokens=max_tokens,
+                stream=stream,
+                audit_context=audit_context,
+                attempt=attempt,
+            )
+        except RetryableAIProviderError as exc:
+            metrics = self.provider_gate.metrics
+            current_limit = int(
+                metrics.get("current_limit")
+                or metrics.get("configured_max")
+                or self.settings.llm_concurrency
+                or 1
+            )
+            self.provider_gate.record_failure(
+                ProviderLease(
+                    waited_seconds=0.0,
+                    limit_at_acquire=max(1, current_limit),
+                    request_class="priority",
+                ),
+                status_code=exc.status_code,
+                transient=True,
+                error=str(exc),
+            )
+            raise
 
     def _request_non_streaming(self, payload: dict[str, Any]) -> tuple[Any, dict[str, Any]]:
         try:
