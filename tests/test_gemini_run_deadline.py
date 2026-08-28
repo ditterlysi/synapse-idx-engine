@@ -1,12 +1,19 @@
 from __future__ import annotations
 
 import threading
+from types import SimpleNamespace
 
 import pytest
 
 from idx_digest import gemini_summarizer as gemini_module
 from idx_digest.ai_fallback import is_retryable_provider_failure
-from idx_digest.gemini_summarizer import GeminiRunDeadlineError, GeminiSummarizer
+from idx_digest.gemini_summarizer import (
+    GeminiRateLimitError,
+    GeminiRunDeadlineError,
+    GeminiSummarizer,
+)
+from idx_digest.provider_gate import AdaptiveProviderGate
+from idx_digest.summarizer import OpenRouterSummarizer
 
 
 def _summarizer(*, deadline: float) -> GeminiSummarizer:
@@ -46,3 +53,35 @@ def test_request_timeout_is_capped_by_remaining_daily_session(monkeypatch) -> No
     summarizer = _summarizer(deadline=130.0)
 
     assert summarizer._request_timeout_seconds() == 29.0
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        GeminiRunDeadlineError("daily deadline"),
+        GeminiRateLimitError("rate limited", retry_after_seconds=60.0),
+    ],
+)
+def test_typed_gemini_failure_releases_provider_slot(monkeypatch, error) -> None:
+    gate = AdaptiveProviderGate(configured_max=1, enabled=True)
+    gate.acquire(request_class="priority")
+    assert gate.metrics["active"] == 1
+
+    summarizer = object.__new__(GeminiSummarizer)
+    summarizer.provider_gate = gate
+    summarizer.settings = SimpleNamespace(llm_concurrency=1)
+
+    def fail_completion(*args, **kwargs):
+        raise error
+
+    monkeypatch.setattr(OpenRouterSummarizer, "_completion_once", fail_completion)
+
+    with pytest.raises(type(error), match=str(error)):
+        summarizer._completion_once(
+            "prompt",
+            schema_name="test_schema",
+            schema={"type": "object"},
+            max_tokens=100,
+        )
+
+    assert gate.metrics["active"] == 0

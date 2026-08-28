@@ -9,6 +9,7 @@ import httpx
 
 from .config import Settings
 from .observability import RunObserver
+from .provider_gate import ProviderLease
 from .summarizer import OpenRouterSummarizer
 from .summary_schemas import SummaryError
 
@@ -247,6 +248,56 @@ class GeminiSummarizer(OpenRouterSummarizer):
                 "daily Gemini analysis deadline reached before a new request could start"
             )
         return timeout_seconds
+
+    def _completion_once(
+        self,
+        user_prompt: str,
+        *,
+        schema_name: str,
+        schema: dict[str, typing.Any],
+        max_tokens: int,
+        stream: bool | None = None,
+        audit_context: dict[str, typing.Any] | None = None,
+        attempt: int = 1,
+    ) -> dict[str, typing.Any]:
+        """Release the provider slot when Gemini raises typed ValueErrors.
+
+        The inherited completion path already releases slots for httpx and
+        SummaryError failures. Gemini intentionally raises typed ValueErrors for
+        terminal rate limits and the daily deadline so those errors bypass the
+        structured-output retry loop. Release the acquired provider slot before
+        propagating either typed error to the ingestion circuit breaker.
+        """
+
+        try:
+            return super()._completion_once(
+                user_prompt,
+                schema_name=schema_name,
+                schema=schema,
+                max_tokens=max_tokens,
+                stream=stream,
+                audit_context=audit_context,
+                attempt=attempt,
+            )
+        except (GeminiRateLimitError, GeminiRunDeadlineError) as exc:
+            metrics = self.provider_gate.metrics
+            current_limit = int(
+                metrics.get("current_limit")
+                or metrics.get("configured_max")
+                or self.settings.llm_concurrency
+                or 1
+            )
+            self.provider_gate.record_failure(
+                ProviderLease(
+                    waited_seconds=0.0,
+                    limit_at_acquire=max(1, current_limit),
+                    request_class="priority",
+                ),
+                status_code=getattr(exc, "status_code", None),
+                transient=isinstance(exc, GeminiRateLimitError),
+                error=str(exc),
+            )
+            raise
 
     def _ensure_rate_limit_state(self) -> None:
         # Some focused unit tests instantiate the adapter with object.__new__.
