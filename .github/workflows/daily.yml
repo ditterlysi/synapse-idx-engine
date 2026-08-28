@@ -2,8 +2,8 @@ name: IDX Daily Collector
 
 on:
   schedule:
-    # 20:00 UTC = 03:00 Asia/Jakarta (next calendar day).
-    - cron: "0 20 * * *"
+    # 20:07 UTC = 03:07 Asia/Jakarta (next calendar day).
+    - cron: "7 20 * * *"
   workflow_dispatch:
   push:
     branches:
