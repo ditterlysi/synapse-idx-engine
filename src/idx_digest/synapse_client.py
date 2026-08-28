@@ -81,29 +81,61 @@ class SynapseClient:
     def _payload(request: SynapseModel) -> dict[str, object]:
         return request.model_dump(mode="json", by_alias=True, exclude_unset=True)
 
-    def _request_json(self, method: str, path: str, payload: dict[str, object]) -> dict[str, object]:
-        response = self._client.request(method, path, json=payload)
-        response.raise_for_status()
-        data = response.json()
-        if not isinstance(data, dict):
-            raise ValueError("Synapse API returned a non-object JSON response")
-        return data
+    def _request_json(
+        self,
+        method: str,
+        path: str,
+        payload: dict[str, object],
+        *,
+        retry_transport: bool = False,
+    ) -> dict[str, object]:
+        attempts = 2 if retry_transport else 1
+        for attempt in range(attempts):
+            try:
+                response = self._client.request(method, path, json=payload)
+            except httpx.TransportError:
+                if attempt + 1 >= attempts:
+                    raise
+                continue
+            response.raise_for_status()
+            data = response.json()
+            if not isinstance(data, dict):
+                raise ValueError("Synapse API returned a non-object JSON response")
+            return data
+        raise AssertionError("unreachable")
 
     def create_run(self, request: CreateRunRequest) -> CreateRunResponse:
+        # Do not retry create_run after a read timeout: the server may already
+        # have created the run and a second POST could create a duplicate row.
         data = self._request_json("POST", "/api/internal/idx/runs", self._payload(request))
         return CreateRunResponse.model_validate(data)
 
     def update_run(self, run_id: str, request: UpdateRunRequest) -> UpdateRunResponse:
-        data = self._request_json("PATCH", f"/api/internal/idx/runs/{run_id}", self._payload(request))
+        data = self._request_json(
+            "PATCH",
+            f"/api/internal/idx/runs/{run_id}",
+            self._payload(request),
+            retry_transport=True,
+        )
         return UpdateRunResponse.model_validate(data)
 
     def resolve_relevance(self, tickers: list[str]) -> RelevanceResponse:
         request = RelevanceRequest(tickers=tickers)
-        data = self._request_json("POST", "/api/internal/idx/relevance", self._payload(request))
+        data = self._request_json(
+            "POST",
+            "/api/internal/idx/relevance",
+            self._payload(request),
+            retry_transport=True,
+        )
         return RelevanceResponse.model_validate(data)
 
     def upsert_disclosures(self, request: DisclosureUpsertRequest) -> DisclosureUpsertResponse:
-        data = self._request_json("POST", "/api/internal/idx/disclosures/upsert", self._payload(request))
+        data = self._request_json(
+            "POST",
+            "/api/internal/idx/disclosures/upsert",
+            self._payload(request),
+            retry_transport=True,
+        )
         return DisclosureUpsertResponse.model_validate(data)
 
     def upsert_files(
@@ -115,10 +147,13 @@ class SynapseClient:
             "POST",
             f"/api/internal/idx/disclosures/{disclosure_id}/files/upsert",
             self._payload(request),
+            retry_transport=True,
         )
         return DisclosureFilesUpsertResponse.model_validate(data)
 
     def commit_analysis(self, disclosure_id: str, request: CommitAnalysisRequest) -> CommitAnalysisResponse:
+        # Analysis commits are not retried here because a read timeout can occur
+        # after the server has already persisted a new analysis row.
         data = self._request_json(
             "POST",
             f"/api/internal/idx/disclosures/{disclosure_id}/analysis",
@@ -135,9 +170,12 @@ class SynapseClient:
             "POST",
             f"/api/internal/idx/disclosures/{disclosure_id}/status",
             self._payload(request),
+            retry_transport=True,
         )
         return UpdateProcessingStatusResponse.model_validate(data)
 
     def commit_coverage(self, request: CoverageCommitRequest) -> CoverageCommitResponse:
+        # Coverage commits may create a new row; leave duplicate handling to the
+        # existing durable checkpoint flow instead of retrying an ambiguous POST.
         data = self._request_json("POST", "/api/internal/idx/coverage/commit", self._payload(request))
         return CoverageCommitResponse.model_validate(data)
