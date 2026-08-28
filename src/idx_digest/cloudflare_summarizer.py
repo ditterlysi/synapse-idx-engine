@@ -7,6 +7,7 @@ import httpx
 
 from .config import Settings
 from .observability import RunObserver
+from .provider_gate import ProviderLease
 from .summarizer import OpenRouterSummarizer
 from .summary_schemas import SummaryError
 
@@ -128,6 +129,56 @@ class CloudflareWorkersAISummarizer(OpenRouterSummarizer):
                 "daily Cloudflare analysis deadline reached before a new request could start"
             )
         return timeout_seconds
+
+    def _completion_once(
+        self,
+        user_prompt: str,
+        *,
+        schema_name: str,
+        schema: dict[str, typing.Any],
+        max_tokens: int,
+        stream: bool | None = None,
+        audit_context: dict[str, typing.Any] | None = None,
+        attempt: int = 1,
+    ) -> dict[str, typing.Any]:
+        """Release the provider slot when Workers AI raises typed ValueErrors.
+
+        The base completion path releases provider slots for httpx and SummaryError
+        failures. Workers AI intentionally uses typed ValueErrors so provider
+        outages and the daily deadline do not enter the generic structured-output
+        retry loop. Those errors happen after the provider slot is acquired, so
+        release that slot here before propagating the original typed error.
+        """
+
+        try:
+            return super()._completion_once(
+                user_prompt,
+                schema_name=schema_name,
+                schema=schema,
+                max_tokens=max_tokens,
+                stream=stream,
+                audit_context=audit_context,
+                attempt=attempt,
+            )
+        except (CloudflareProviderError, CloudflareRunDeadlineError) as exc:
+            metrics = self.provider_gate.metrics
+            current_limit = int(
+                metrics.get("current_limit")
+                or metrics.get("configured_max")
+                or self.settings.llm_concurrency
+                or 1
+            )
+            self.provider_gate.record_failure(
+                ProviderLease(
+                    waited_seconds=0.0,
+                    limit_at_acquire=max(1, current_limit),
+                    request_class="priority",
+                ),
+                status_code=getattr(exc, "status_code", None),
+                transient=isinstance(exc, CloudflareProviderError),
+                error=str(exc),
+            )
+            raise
 
     def _request_non_streaming(
         self, payload: dict[str, typing.Any]
