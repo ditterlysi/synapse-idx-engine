@@ -22,7 +22,11 @@ from .synapse_contract import (
 )
 
 
-STALE_SOURCE_RUN_AGE = timedelta(minutes=95)
+# The production collector budget is 80 minutes while the GitHub job timeout is
+# 90 minutes. Recover a still-RUNNING source row after the collector budget plus
+# a small grace period, so a job killed by the outer workflow timeout cannot
+# become invisible once the next run registers as latestAttempt.
+STALE_SOURCE_RUN_AGE = timedelta(minutes=85)
 
 
 def _now_iso() -> str:
