@@ -1,2 +1,2 @@
-2026-08-28T15:54:30+07:00
-reason=verify PR 49 Gemini fallback provider-slot release after run 19 stalled on OLIV multi-chunk processing; retryable Gemini transport failures must release active slots so Cloudflare fallback or AI deadline handling can proceed and preserve partial checkpoint progress
+2026-08-29T06:31:00+07:00
+reason=verify main after PR 50 safe Synapse Internal API transport retry and PR 51 85-minute stale source-run recovery window; collector should run without reviving or creating orphan RUNNING rows, preserve checkpoint progress on partial AI outcomes, and retry only safe idempotent internal API operations
