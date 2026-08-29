@@ -8,7 +8,7 @@ def test_daily_workflow_keeps_production_guardrails() -> None:
     assert 'cron: "37 20 * * *"' in workflow
     assert "workflow_dispatch:" in workflow
     assert "vars.IDX_DAILY_ENABLED == 'true'" in workflow
-    assert "needs.schedule-preflight.outputs.should_run == 'true'" in workflow
+    assert "needs.schedule_preflight.outputs.should_run == 'true'" in workflow
     assert "SYNAPSE_DAILY_ENABLED: \"true\"" in workflow
     assert "SYNAPSE_DAILY_TRANSPORT: http" in workflow
     assert "SYNAPSE_DAILY_ALLOW_HISTORICAL_BACKFILL: \"false\"" in workflow
@@ -35,6 +35,7 @@ def test_daily_workflow_keeps_production_guardrails() -> None:
 def test_daily_workflow_has_fail_open_duplicate_guard_for_backup_schedule() -> None:
     workflow = Path(".github/workflows/daily.yml").read_text(encoding="utf-8")
 
+    assert "schedule_preflight:" in workflow
     assert "Schedule delivery guard" in workflow
     assert "Suppress duplicate scheduled delivery" in workflow
     assert "event=schedule&per_page=20" in workflow
