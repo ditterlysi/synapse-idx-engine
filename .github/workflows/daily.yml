@@ -23,7 +23,7 @@ permissions:
   contents: read
 
 jobs:
-  schedule-preflight:
+  schedule_preflight:
     name: Schedule delivery guard
     runs-on: ubuntu-latest
     outputs:
@@ -106,8 +106,8 @@ jobs:
           PY
 
   collect:
-    needs: schedule-preflight
-    if: ${{ vars.IDX_DAILY_ENABLED == 'true' && needs.schedule-preflight.outputs.should_run == 'true' }}
+    needs: schedule_preflight
+    if: ${{ vars.IDX_DAILY_ENABLED == 'true' && needs.schedule_preflight.outputs.should_run == 'true' }}
     runs-on: ubuntu-latest
     timeout-minutes: 90
     env:
