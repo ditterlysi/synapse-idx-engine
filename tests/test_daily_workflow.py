@@ -8,7 +8,7 @@ def test_daily_workflow_keeps_production_guardrails() -> None:
     assert 'cron: "37 20 * * *"' in workflow
     assert "workflow_dispatch:" in workflow
     assert "vars.IDX_DAILY_ENABLED == 'true'" in workflow
-    assert "needs.schedule-preflight.outputs.should-run == 'true'" in workflow
+    assert "needs.schedule-preflight.outputs.should_run == 'true'" in workflow
     assert "SYNAPSE_DAILY_ENABLED: \"true\"" in workflow
     assert "SYNAPSE_DAILY_TRANSPORT: http" in workflow
     assert "SYNAPSE_DAILY_ALLOW_HISTORICAL_BACKFILL: \"false\"" in workflow
@@ -40,9 +40,10 @@ def test_daily_workflow_has_fail_open_duplicate_guard_for_backup_schedule() -> N
     assert "event=schedule&per_page=20" in workflow
     assert "timedelta(hours=2)" in workflow
     assert "CURRENT_RUN_ID" in workflow
+    assert "should_run=" in workflow
     assert "Schedule guard API unavailable; failing open" in workflow
     assert "No recent scheduled collector delivery found" in workflow
-    assert "suppressing duplicate" in workflow
+    assert "preventing duplicate" in workflow
 
     # Redundant cron delivery must not create a second collector invocation in
     # the workflow definition. The preflight only decides whether the one
