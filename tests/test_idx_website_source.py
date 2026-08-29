@@ -5,10 +5,8 @@ from datetime import datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
-import pytest
-
 from idx_digest.idx_polite_http import IdxResourceNotFoundError
-from idx_digest.sources.idx_website import FileCheckpointStore, IdxWebsiteSource, IdxWebsiteSourceError
+from idx_digest.sources.idx_website import FileCheckpointStore, IdxWebsiteSource
 
 
 JAKARTA = ZoneInfo("Asia/Jakarta")
@@ -261,7 +259,7 @@ def test_source_skips_unsupported_ticker_rows_without_checkpointing_them(tmp_pat
     assert unsupported_id not in checkpoint["seenIds"]
 
 
-def test_source_still_fails_closed_when_issuer_title_is_missing(tmp_path):
+def test_source_uses_official_fallback_when_issuer_title_is_missing(tmp_path):
     payload = _payload()
     payload["Replies"][0]["pengumuman"]["JudulPengumuman"] = ""
     client = FakePoliteClient(payload)
@@ -271,11 +269,16 @@ def test_source_still_fails_closed_when_issuer_title_is_missing(tmp_path):
         staging_dir=tmp_path / "cache",
     )
 
-    with pytest.raises(IdxWebsiteSourceError, match="missing title"):
-        source.collect_window(
-            start_at=datetime(2026, 8, 22, 19, 0, tzinfo=JAKARTA),
-            end_at=datetime(2026, 8, 22, 21, 0, tzinfo=JAKARTA),
-        )
+    result = source.collect_window(
+        start_at=datetime(2026, 8, 22, 19, 0, tzinfo=JAKARTA),
+        end_at=datetime(2026, 8, 22, 21, 0, tzinfo=JAKARTA),
+    )
+
+    assert len(result.disclosures) == 1
+    disclosure = result.disclosures[0]
+    assert disclosure.title == "Controlled fixture"
+    assert disclosure.metadata["idxTitleSource"] == "PerihalPengumuman"
+    assert result.diagnostics["titleFallbackRows"] == 1
 
 
 def test_source_skips_issuer_with_404_attachment_without_checkpointing_it(tmp_path):
