@@ -27,7 +27,7 @@ jobs:
     name: Schedule delivery guard
     runs-on: ubuntu-latest
     outputs:
-      should-run: ${{ steps.guard.outputs.should-run }}
+      should_run: ${{ steps.guard.outputs.should_run }}
     steps:
       - name: Suppress duplicate scheduled delivery
         id: guard
@@ -48,7 +48,7 @@ jobs:
           def emit(value: bool, message: str) -> None:
               print(message)
               with open(output_path, "a", encoding="utf-8") as handle:
-                  handle.write(f"should-run={'true' if value else 'false'}\n")
+                  handle.write(f"should_run={'true' if value else 'false'}\n")
 
           if os.environ.get("EVENT_NAME") != "schedule":
               emit(True, "Non-scheduled trigger: collector remains enabled.")
@@ -99,7 +99,7 @@ jobs:
               emit(
                   False,
                   "Scheduled collector delivery already exists within two hours; "
-                  f"suppressing duplicate: {recent_other_runs[0]}",
+                  f"preventing duplicate: {recent_other_runs[0]}",
               )
           else:
               emit(True, "No recent scheduled collector delivery found; collector will run.")
@@ -107,7 +107,7 @@ jobs:
 
   collect:
     needs: schedule-preflight
-    if: ${{ vars.IDX_DAILY_ENABLED == 'true' && needs.schedule-preflight.outputs.should-run == 'true' }}
+    if: ${{ vars.IDX_DAILY_ENABLED == 'true' && needs.schedule-preflight.outputs.should_run == 'true' }}
     runs-on: ubuntu-latest
     timeout-minutes: 90
     env:
