@@ -1,2 +1,2 @@
-2026-08-29T06:31:00+07:00
-reason=verify main after PR 50 safe Synapse Internal API transport retry and PR 51 85-minute stale source-run recovery window; collector should run without reviving or creating orphan RUNNING rows, preserve checkpoint progress on partial AI outcomes, and retry only safe idempotent internal API operations
+2026-08-29T07:08:00+07:00
+reason=verify production collector after PR 52 missing-title recovery; exact UPRI row 20260828211633-166/UPRI/DIR/VIII/2026_id-id must no longer abort the source window, title fallback should be observable, and normal checkpoint/AI guardrails must remain unchanged
