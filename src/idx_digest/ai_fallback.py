@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 import re
 import threading
+import time
 from typing import Any, Callable
 
 import httpx
@@ -16,6 +17,7 @@ from .summary_schemas import SummaryError
 
 _LOGGER = logging.getLogger(__name__)
 _RETRYABLE_GEMINI_STATUS_RE = re.compile(r"Gemini request failed \((\d{3})\):")
+_PRIMARY_TRANSIENT_RETRY_DELAY_SECONDS = 1.0
 
 
 class RetryableAIProviderError(ValueError):
@@ -91,24 +93,64 @@ class FallbackAwareGeminiSummarizer(GeminiSummarizer):
             )
             raise
 
+    def _wait_before_transient_retry(self, error: BaseException) -> None:
+        """Back off once while preserving the scheduled-run AI deadline."""
+
+        remaining = self._remaining_run_seconds()
+        delay = _PRIMARY_TRANSIENT_RETRY_DELAY_SECONDS
+        if remaining is not None:
+            delay = min(delay, max(0.0, remaining / 2.0))
+
+        _LOGGER.warning(
+            "Transient Gemini provider failure; retrying primary once before fallback (%s: %s)",
+            type(error).__name__,
+            str(error)[:500],
+        )
+        if self.observer:
+            self.observer.event(
+                "llm",
+                "Gemini transient failure; retrying primary once before fallback",
+                level="WARNING",
+                always=True,
+                provider="google-gemini",
+                model=getattr(self, "api_model", None),
+                error_type=type(error).__name__,
+                error=str(error)[:500],
+            )
+        if delay > 0:
+            time.sleep(delay)
+        self._remaining_run_seconds()
+
     def _request_non_streaming(self, payload: dict[str, Any]) -> tuple[Any, dict[str, Any]]:
-        try:
-            return super()._request_non_streaming(payload)
-        except GeminiRateLimitError:
-            raise
-        except httpx.HTTPError as exc:
-            raise RetryableAIProviderError(
-                f"Gemini network failure: {exc}"
-            ) from exc
-        except SummaryError as exc:
-            match = _RETRYABLE_GEMINI_STATUS_RE.search(str(exc))
-            if match:
+        for attempt in range(2):
+            try:
+                return super()._request_non_streaming(payload)
+            except GeminiRateLimitError:
+                # The base Gemini adapter already performs its provider-directed
+                # cooldown retry. Do not add another request before falling back.
+                raise
+            except httpx.HTTPError as exc:
+                if attempt == 0:
+                    self._wait_before_transient_retry(exc)
+                    continue
+                raise RetryableAIProviderError(
+                    f"Gemini network failure after one retry: {exc}"
+                ) from exc
+            except SummaryError as exc:
+                match = _RETRYABLE_GEMINI_STATUS_RE.search(str(exc))
+                if not match:
+                    raise
                 status_code = int(match.group(1))
-                if status_code == 408 or status_code >= 500:
-                    raise RetryableAIProviderError(
-                        str(exc), status_code=status_code
-                    ) from exc
-            raise
+                if status_code != 408 and status_code < 500:
+                    raise
+                if attempt == 0:
+                    self._wait_before_transient_retry(exc)
+                    continue
+                raise RetryableAIProviderError(
+                    str(exc), status_code=status_code
+                ) from exc
+
+        raise AssertionError("unreachable Gemini transient retry state")
 
 
 SummarizerFactory = Callable[..., Any]
