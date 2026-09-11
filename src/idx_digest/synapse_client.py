@@ -26,6 +26,29 @@ from .synapse_contract import (
 )
 
 
+def create_synapse_internal_http_client(
+    settings: Settings,
+    *,
+    transport: httpx.BaseTransport | None = None,
+) -> httpx.Client:
+    base_url = settings.synapse_internal_base_url.strip().rstrip("/")
+    secret = settings.synapse_ingestion_secret.get_secret_value().strip()
+    SynapseClient._validate_base_url(base_url)
+    if not secret:
+        raise SynapseClientConfigurationError("SYNAPSE_INGESTION_SECRET is required")
+
+    return httpx.Client(
+        base_url=base_url,
+        headers={
+            "Authorization": f"Bearer {secret}",
+            "Accept": "application/json",
+            "User-Agent": "SynapseIDXEngine/0.16.0",
+        },
+        timeout=httpx.Timeout(30.0),
+        transport=transport,
+    )
+
+
 class SynapseClientConfigurationError(ValueError):
     pass
 
@@ -44,16 +67,7 @@ class SynapseClient:
         if not secret:
             raise SynapseClientConfigurationError("SYNAPSE_INGESTION_SECRET is required")
 
-        self._client = httpx.Client(
-            base_url=base_url,
-            headers={
-                "Authorization": f"Bearer {secret}",
-                "Accept": "application/json",
-                "User-Agent": "SynapseIDXEngine/0.16.0",
-            },
-            timeout=httpx.Timeout(30.0),
-            transport=transport,
-        )
+        self._client = create_synapse_internal_http_client(settings, transport=transport)
 
     @staticmethod
     def _validate_base_url(base_url: str) -> None:

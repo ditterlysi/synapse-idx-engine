@@ -34,6 +34,13 @@ RecoveryAction = Literal[
     "HELD",
     "MANUAL_REVIEW",
 ]
+RecoveryReadErrorCode = Literal[
+    "NOT_FOUND",
+    "UNAUTHORIZED",
+    "INVALID_UUID",
+    "WRONG_SOURCE",
+    "INTERNAL_API_ERROR",
+]
 
 
 def _to_camel(value: str) -> str:
@@ -180,6 +187,7 @@ class CurrentDisclosure(RecoveryModel):
     disclosure_id: UUID
     external_id: str = Field(min_length=1, max_length=200)
     ticker: str = Field(min_length=1, max_length=10)
+    title: str | None = Field(default=None, max_length=2000)
     processing_status: ProcessingStatus
     updated_at: datetime
     is_stock_scope: bool
@@ -209,6 +217,32 @@ class CurrentDisclosure(RecoveryModel):
         if value != IDX_WEBSITE_SOURCE_ID:
             raise ValueError(f"source_id must be {IDX_WEBSITE_SOURCE_ID}")
         return value
+
+
+def _manifest_mismatch_reasons(
+    record: RecoveryManifestRecord,
+    current: CurrentDisclosure,
+) -> list[str]:
+    reasons: list[str] = []
+    if current.disclosure_id != record.disclosure_id:
+        reasons.append("disclosure_id mismatch")
+    if current.external_id != record.expected_external_id:
+        reasons.append("external_id mismatch")
+    if current.ticker != record.ticker:
+        reasons.append("ticker mismatch")
+    if current.source_id != IDX_WEBSITE_SOURCE_ID:
+        reasons.append("source_id is not idx-website")
+    if current.processing_status != record.expected_status:
+        reasons.append("processing_status changed since manifest")
+    if current.updated_at != record.expected_updated_at:
+        reasons.append("updated_at concurrency guard changed")
+    if not current.is_stock_scope:
+        reasons.append("disclosure is outside stock scope")
+    if current.declared_attachment_count != record.declared_attachment_count:
+        reasons.append("declared attachment count changed")
+    if tuple(current.attachment_hashes) != tuple(record.expected_attachment_hashes):
+        reasons.append("attachment hash metadata changed")
+    return reasons
 
 
 class CurrentFile(RecoveryModel):
@@ -265,7 +299,7 @@ class RecoveryCaps(RecoveryModel):
 
 class RecoveryPreflight(RecoveryModel):
     disclosure_id: UUID
-    outcome: Literal["READY", "SKIP", "HELD", "ALREADY_READY"]
+    outcome: Literal["READY", "SKIP", "HELD", "ALREADY_READY", "PRECONDITION_FAILED"]
     action: RecoveryAction
     reasons: tuple[str, ...] = ()
     attachments_needed: int = 0
@@ -278,7 +312,15 @@ class RecoveryPreflight(RecoveryModel):
 
 class RecoveryRecordResult(RecoveryModel):
     disclosure_id: UUID
-    outcome: Literal["PLANNED", "READY", "SKIPPED", "HELD", "FAILED", "ALREADY_READY"]
+    outcome: Literal[
+        "PLANNED",
+        "READY",
+        "SKIPPED",
+        "HELD",
+        "FAILED",
+        "ALREADY_READY",
+        "PRECONDITION_FAILED",
+    ]
     action: RecoveryAction
     reasons: tuple[str, ...] = ()
 
@@ -328,6 +370,12 @@ class RecoveryHashMismatch(RecoveryRunnerError):
 
 class RecoveryExecutionError(RecoveryRunnerError):
     pass
+
+
+class RecoveryReadError(RecoveryRunnerError):
+    def __init__(self, code: RecoveryReadErrorCode, message: str) -> None:
+        super().__init__(message)
+        self.code = code
 
 
 class RecoveryStore(Protocol):
@@ -463,44 +511,34 @@ class RecoveryRunner:
         self.caps = caps or RecoveryCaps()
 
     def _preflight(self, record: RecoveryManifestRecord) -> _Plan:
-        current = self.store.fetch_disclosure(record.disclosure_id)
+        try:
+            current = self.store.fetch_disclosure(record.disclosure_id)
+        except RecoveryReadError as exc:
+            return _Plan(
+                RecoveryPreflight(
+                    disclosure_id=record.disclosure_id,
+                    outcome="PRECONDITION_FAILED",
+                    action="MANUAL_REVIEW",
+                    reasons=(f"{exc.code}: {exc}",),
+                )
+            )
         if current is None:
             return _Plan(
                 RecoveryPreflight(
                     disclosure_id=record.disclosure_id,
-                    outcome="SKIP",
+                    outcome="PRECONDITION_FAILED",
                     action="MANUAL_REVIEW",
-                    reasons=("disclosure row not found",),
+                    reasons=("NOT_FOUND: disclosure row not found",),
                 )
             )
 
-        reasons: list[str] = []
-        if current.disclosure_id != record.disclosure_id:
-            reasons.append("disclosure_id mismatch")
-        if current.external_id != record.expected_external_id:
-            reasons.append("external_id mismatch")
-        if current.ticker != record.ticker:
-            reasons.append("ticker mismatch")
-        if current.source_id != IDX_WEBSITE_SOURCE_ID:
-            reasons.append("source_id is not idx-website")
-        if current.processing_status != record.expected_status:
-            reasons.append("processing_status changed since manifest")
-        if current.updated_at != record.expected_updated_at:
-            reasons.append("updated_at concurrency guard changed")
-        if not current.is_stock_scope:
-            reasons.append("disclosure is outside stock scope")
-        if current.declared_attachment_count != record.declared_attachment_count:
-            reasons.append("declared attachment count changed")
-        if tuple(current.attachment_hashes) != tuple(record.expected_attachment_hashes):
-            reasons.append("attachment hash metadata changed")
-        if len(record.expected_attachment_hashes) != record.declared_attachment_count:
-            reasons.append("manifest attachment count/hash metadata is inconsistent")
+        reasons = _manifest_mismatch_reasons(record, current)
 
         if reasons:
             return _Plan(
                 RecoveryPreflight(
                     disclosure_id=record.disclosure_id,
-                    outcome="SKIP",
+                    outcome="PRECONDITION_FAILED",
                     action="MANUAL_REVIEW",
                     reasons=tuple(reasons),
                 )
@@ -526,7 +564,7 @@ class RecoveryRunner:
             return _Plan(
                 RecoveryPreflight(
                     disclosure_id=record.disclosure_id,
-                    outcome="SKIP",
+                    outcome="PRECONDITION_FAILED",
                     action="MANUAL_REVIEW",
                     reasons=tuple(reasons),
                 ),
@@ -558,7 +596,7 @@ class RecoveryRunner:
             return _Plan(
                 RecoveryPreflight(
                     disclosure_id=record.disclosure_id,
-                    outcome="SKIP",
+                    outcome="PRECONDITION_FAILED",
                     action="MANUAL_REVIEW",
                     reasons=tuple(cache_errors),
                 ),
@@ -676,12 +714,16 @@ class RecoveryRunner:
                 )
         for plan, record in zip(plans, manifest.records, strict=True):
             preflight = plan.preflight
-            if preflight.outcome == "SKIP":
+            if preflight.outcome in {"SKIP", "PRECONDITION_FAILED"}:
                 skipped += 1
                 records.append(
                     RecoveryRecordResult(
                         disclosure_id=record.disclosure_id,
-                        outcome="SKIPPED",
+                        outcome=(
+                            "PRECONDITION_FAILED"
+                            if preflight.outcome == "PRECONDITION_FAILED"
+                            else "SKIPPED"
+                        ),
                         action=preflight.action,
                         reasons=preflight.reasons,
                     )
@@ -794,9 +836,10 @@ class RecoveryRunner:
     def _execute_record(self, record: RecoveryManifestRecord, plan: _Plan) -> None:
         current = self.store.fetch_disclosure(record.disclosure_id)
         if current is None:
-            raise RecoveryPreflightError("disclosure disappeared during execution")
-        if current.updated_at != record.expected_updated_at or current.processing_status != record.expected_status:
-            raise RecoveryPreflightError("disclosure changed after preflight")
+            raise RecoveryPreflightError("PRECONDITION_FAILED: disclosure disappeared during execution")
+        mismatch_reasons = _manifest_mismatch_reasons(record, current)
+        if mismatch_reasons:
+            raise RecoveryPreflightError(f"PRECONDITION_FAILED: {'; '.join(mismatch_reasons)}")
         action = plan.preflight.action
         if action == "NOOP":
             return
@@ -920,6 +963,7 @@ __all__ = [
     "RecoveryManifestRecord",
     "RecoveryPreflightError",
     "RecoveryPreflight",
+    "RecoveryReadError",
     "RecoveryRunner",
     "RecoveryRunnerError",
     "RecoverySnapshot",

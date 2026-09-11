@@ -188,6 +188,7 @@ def test_external_id_mismatch_is_skipped() -> None:
         _manifest(record), dry_run=True
     )
     assert "external_id mismatch" in report.records[0].reasons
+    assert report.records[0].outcome == "PRECONDITION_FAILED"
 
 
 def test_updated_at_concurrency_change_is_skipped() -> None:
@@ -197,6 +198,36 @@ def test_updated_at_concurrency_change_is_skipped() -> None:
         _manifest(record), dry_run=True
     )
     assert "updated_at concurrency guard changed" in report.records[0].reasons
+    assert report.records[0].outcome == "PRECONDITION_FAILED"
+
+
+def test_stock_scope_mismatch_is_precondition_failure() -> None:
+    record = _record(uuid4())
+    current = _current(record).model_copy(update={"is_stock_scope": False})
+    report = RecoveryRunner(
+        SnapshotRecoveryStore(RecoverySnapshot(disclosures=(current,)))
+    ).run(_manifest(record), dry_run=True)
+    assert report.records[0].outcome == "PRECONDITION_FAILED"
+    assert "disclosure is outside stock scope" in report.records[0].reasons
+
+
+def test_attachment_metadata_mismatch_is_precondition_failure() -> None:
+    record = _record(uuid4())
+    current = _current(record).model_copy(update={"attachment_hashes": (HASH_2,)})
+    report = RecoveryRunner(
+        SnapshotRecoveryStore(RecoverySnapshot(disclosures=(current,)))
+    ).run(_manifest(record), dry_run=True)
+    assert report.records[0].outcome == "PRECONDITION_FAILED"
+    assert "attachment hash metadata changed" in report.records[0].reasons
+
+
+def test_partial_attachment_hash_metadata_remains_a_valid_precondition() -> None:
+    record = _record(uuid4(), count=2, hashes=(HASH,))
+    current = _current(record)
+    report = RecoveryRunner(
+        SnapshotRecoveryStore(RecoverySnapshot(disclosures=(current,)))
+    ).run(_manifest(record), dry_run=True)
+    assert report.records[0].outcome == "PLANNED"
 
 
 def test_status_changed_after_manifest_is_skipped() -> None:
