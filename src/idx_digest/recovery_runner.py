@@ -412,6 +412,7 @@ class DownloadedArtifact:
     source_url: str
     path: Path
     sha256: str
+    cache_hit: bool = False
 
 
 @dataclass(frozen=True)
@@ -427,6 +428,32 @@ class ExtractedArtifact:
         object.__setattr__(self, "text_hash", normalized)
 
 
+@dataclass(frozen=True)
+class RecoverySourcePlan:
+    """Source work discovered during exact-ID preflight.
+
+    ``metadata_requests`` have already happened while preparing the plan;
+    ``planned_download_requests`` are the additional source requests expected
+    if the selected attachments are not already cached.  Keeping both values
+    explicit lets the runner enforce the cap before opening a RETRY run while
+    the execution report still reflects actual HTTP requests.
+    """
+
+    selected_attachment_count: int = 0
+    metadata_requests: int = 0
+    planned_download_requests: int = 0
+
+    def __post_init__(self) -> None:
+        if self.selected_attachment_count < 0:
+            raise ValueError("selected_attachment_count must be non-negative")
+        if self.metadata_requests < 0 or self.planned_download_requests < 0:
+            raise ValueError("source request counts must be non-negative")
+
+    @property
+    def source_requests(self) -> int:
+        return self.metadata_requests + self.planned_download_requests
+
+
 @dataclass
 class RecoveryHooks:
     """Adapters to the existing downloader, extractors and validated Synapse writes."""
@@ -437,6 +464,8 @@ class RecoveryHooks:
     ) = None
     analyze_document: Callable[[CurrentDisclosure, CurrentFile, str], object] | None = None
     analyze_announcement: Callable[[CurrentDisclosure, Sequence[object]], object] | None = None
+    prepare_source: Callable[[CurrentDisclosure, RecoveryManifestRecord, Sequence[CurrentFile]], RecoverySourcePlan] | None = None
+    source_request_counter: Callable[[], int] | None = None
 
 
 @dataclass
@@ -446,12 +475,14 @@ class _Plan:
     files: tuple[CurrentFile, ...] = ()
     valid_cached_files: tuple[CurrentFile, ...] = ()
     download_hashes: tuple[str | None, ...] = ()
+    source_plan: RecoverySourcePlan | None = None
 
 
 @dataclass
 class _ExecutionMetrics:
     source_requests: int = 0
     files_downloaded: int = 0
+    files_reused: int = 0
     extraction_count: int = 0
     ai_document_calls: int = 0
     announcement_analyses: int = 0
@@ -658,6 +689,49 @@ class RecoveryRunner:
         unavailable = [file for file in files if file not in valid and file not in staged]
         missing = max(record.declared_attachment_count - len(valid) - len(staged), 0)
         source_needed = missing + len(unavailable)
+        source_plan: RecoverySourcePlan | None = None
+        if source_needed and self.hooks.prepare_source is not None:
+            try:
+                source_plan = self.hooks.prepare_source(current, record, files)
+            except RecoveryRunnerError as exc:
+                return _Plan(
+                    RecoveryPreflight(
+                        disclosure_id=record.disclosure_id,
+                        outcome="PRECONDITION_FAILED",
+                        action="MANUAL_REVIEW",
+                        reasons=(f"SOURCE_RESOLUTION_FAILED: {exc}",),
+                    ),
+                    current=current,
+                    files=files,
+                )
+            except Exception as exc:
+                return _Plan(
+                    RecoveryPreflight(
+                        disclosure_id=record.disclosure_id,
+                        outcome="PRECONDITION_FAILED",
+                        action="MANUAL_REVIEW",
+                        reasons=(f"SOURCE_RESOLUTION_FAILED: {type(exc).__name__}: {exc}",),
+                    ),
+                    current=current,
+                    files=files,
+                )
+            if source_plan.selected_attachment_count > record.declared_attachment_count:
+                return _Plan(
+                    RecoveryPreflight(
+                        disclosure_id=record.disclosure_id,
+                        outcome="PRECONDITION_FAILED",
+                        action="MANUAL_REVIEW",
+                        reasons=("source selector returned more attachments than the manifest declaration",),
+                    ),
+                    current=current,
+                    files=files,
+                    source_plan=source_plan,
+                )
+            selected_missing = max(
+                source_plan.selected_attachment_count - len(valid) - len(staged),
+                0,
+            )
+            source_needed = selected_missing
         if valid and not source_needed:
             action: RecoveryAction = "AI_ONLY_RETRY"
         elif source_needed:
@@ -673,7 +747,11 @@ class RecoveryRunner:
 
         attachments_needed = source_needed if action in {"ATTACHMENT_DOWNLOAD", "METADATA_PROCESS_RESUME"} else 0
         considered = len(files) + attachments_needed
-        source_requests = attachments_needed
+        source_requests = (
+            source_plan.source_requests
+            if source_plan is not None
+            else attachments_needed
+        )
         ai_documents = len(valid) if action == "AI_ONLY_RETRY" else max(considered, 0)
         announcement = 0 if action == "NOOP" else 1
         return _Plan(
@@ -692,6 +770,7 @@ class RecoveryRunner:
             files=files,
             valid_cached_files=tuple(valid),
             download_hashes=_download_hashes(record.expected_attachment_hashes, files, attachments_needed),
+            source_plan=source_plan,
         )
 
     def _cap_error(self, message: str) -> RecoveryRunReport:
@@ -742,7 +821,7 @@ class RecoveryRunner:
             extraction_count = metrics.extraction_count
             source_requests = metrics.source_requests
             files_downloaded = metrics.files_downloaded
-            files_reused = preflight.files_reused
+            files_reused = preflight.files_reused + metrics.files_reused
             ai_document_calls = metrics.ai_document_calls
             analysis_result = metrics.analysis_result
             after_status = metrics.after_status
@@ -921,7 +1000,9 @@ class RecoveryRunner:
                 )
                 continue
 
-            metrics = _ExecutionMetrics()
+            metrics = _ExecutionMetrics(
+                source_requests=(plan.source_plan.metadata_requests if plan.source_plan else 0)
+            )
             try:
                 self._execute_record(record, plan, metrics)
                 ready += 1
@@ -1030,6 +1111,7 @@ class RecoveryRunner:
         metrics.db_commits += 1
         metrics.after_status = "EXTRACTING"
         files_to_analyze: list[CurrentFile] = list(plan.valid_cached_files)
+        extracted_texts: dict[str, str] = {}
 
         if action in {"ATTACHMENT_DOWNLOAD", "METADATA_PROCESS_RESUME"}:
             if self.hooks.download_attachment is None:
@@ -1037,15 +1119,31 @@ class RecoveryRunner:
             if self.hooks.extract_attachment is None:
                 raise RecoveryExecutionError("extraction hook is required for attachment recovery")
             for index, expected_hash in enumerate(plan.download_hashes):
-                metrics.source_requests += 1
+                request_count_before = (
+                    self.hooks.source_request_counter() if self.hooks.source_request_counter is not None else None
+                )
                 artifact = self.hooks.download_attachment(current, index, expected_hash)
+                request_count_after = (
+                    self.hooks.source_request_counter() if self.hooks.source_request_counter is not None else None
+                )
+                if request_count_before is not None and request_count_after is not None:
+                    metrics.source_requests += max(0, request_count_after - request_count_before)
+                elif self.hooks.source_request_counter is None:
+                    metrics.source_requests += 1
                 if not artifact.path.exists() or not artifact.path.is_file():
                     raise RecoveryExecutionError(f"{artifact.source_url}: downloaded artifact is unavailable")
                 actual = _file_sha256(artifact.path)
                 declared = artifact.sha256.lower()
-                if declared != actual or (expected_hash is not None and actual != expected_hash):
+                expected_set = set(record.expected_attachment_hashes)
+                expected_mismatch = expected_hash is not None and actual != expected_hash
+                if expected_mismatch and len(expected_set) >= record.declared_attachment_count:
+                    expected_mismatch = actual not in expected_set
+                if declared != actual or expected_mismatch:
                     raise RecoveryHashMismatch(f"{artifact.source_url}: downloaded hash mismatch")
-                metrics.files_downloaded += 1
+                if artifact.cache_hit:
+                    metrics.files_reused += 1
+                else:
+                    metrics.files_downloaded += 1
                 file = CurrentFile(
                     disclosure_id=record.disclosure_id,
                     source_url=artifact.source_url,
@@ -1056,6 +1154,7 @@ class RecoveryRunner:
                 )
                 extracted = self.hooks.extract_attachment(current, file, artifact)
                 metrics.extraction_count += 1
+                extracted_texts[file.source_url] = extracted.text
                 file = file.model_copy(
                     update={
                         "extraction_status": "EXTRACTED",
@@ -1082,6 +1181,7 @@ class RecoveryRunner:
                 )
                 extracted = self.hooks.extract_attachment(current, file, artifact)
                 metrics.extraction_count += 1
+                extracted_texts[file.source_url] = extracted.text
                 updated = file.model_copy(
                     update={
                         "extraction_status": "EXTRACTED",
@@ -1107,6 +1207,7 @@ class RecoveryRunner:
                 )
                 extracted = self.hooks.extract_attachment(current, file, artifact)
                 metrics.extraction_count += 1
+                extracted_texts[file.source_url] = extracted.text
                 updated = file.model_copy(
                     update={
                         "download_status": "DOWNLOADED",
@@ -1124,7 +1225,13 @@ class RecoveryRunner:
         metrics.analysis_result = "FAILED"
         documents: list[object] = []
         for file in files_to_analyze:
-            text = file.extracted_text_ref or ""
+            text = extracted_texts.get(file.source_url, "")
+            if not text and file.extracted_text_ref:
+                reference = Path(file.extracted_text_ref)
+                if reference.exists() and reference.is_file():
+                    text = reference.read_text(encoding="utf-8", errors="replace")
+                else:
+                    text = file.extracted_text_ref
             metrics.ai_document_calls += 1
             documents.append(self.hooks.analyze_document(current, file, text))
         metrics.announcement_analyses += 1
@@ -1171,6 +1278,7 @@ __all__ = [
     "RecoveryRunner",
     "RecoveryRunnerError",
     "RecoverySnapshot",
+    "RecoverySourcePlan",
     "SnapshotRecoveryStore",
     "load_manifest",
     "load_snapshot",

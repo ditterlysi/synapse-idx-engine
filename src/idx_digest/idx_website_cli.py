@@ -13,7 +13,9 @@ from .config import Settings
 from .daily_guardrails import DailyPolicy, DailyPolicyError
 from .durable_checkpoint import SelectiveMemoryCheckpointStore
 from .idx_polite_http import CURRENT_IDX_BASE_URL, PoliteFetchClient
+from .recovery_live_pipeline import LiveRecoveryPipeline
 from .recovery_runner import RecoveryCaps, RecoveryRunner, SnapshotRecoveryStore, load_manifest, load_snapshot
+from .recovery_write_adapter import SynapseRecoveryWriteStore
 from .source_ingestion import SourceIngestionRunner
 from .source_state_client import SourceStateSynapseClient, checkpoint_from_payload
 from .sources.idx_website import (
@@ -139,37 +141,79 @@ def health() -> None:
 @app.command("recover-pending")
 def recover_pending(
     manifest: Path = typer.Option(..., "--manifest", help="Immutable per-disclosure RETRY manifest JSON."),
-    snapshot: Path = typer.Option(..., "--snapshot", help="Read-only current-state snapshot JSON."),
+    snapshot: Path | None = typer.Option(None, "--snapshot", help="Read-only current-state snapshot JSON for dry-runs."),
+    execute_live: bool = typer.Option(
+        False,
+        "--execute-live",
+        help="Explicitly enable bounded live execution through the authenticated Synapse writer.",
+    ),
     dry_run: bool = typer.Option(
         False,
         "--dry-run",
         help="Required Phase 2B-1 gate: preflight and budget planning only; no network or writes.",
     ),
-    max_records: int = typer.Option(12, "--max-records", min=1, max=100),
-    max_source_requests: int = typer.Option(12, "--max-source-requests", min=0, max=100),
-    max_attachments: int = typer.Option(20, "--max-attachments", min=0, max=100),
-    max_ai_documents: int = typer.Option(20, "--max-ai-documents", min=0, max=100),
+    max_records: int | None = typer.Option(None, "--max-records", min=1, max=100),
+    max_source_requests: int | None = typer.Option(None, "--max-source-requests", min=0, max=100),
+    max_attachments: int | None = typer.Option(None, "--max-attachments", min=0, max=100),
+    max_ai_documents: int | None = typer.Option(None, "--max-ai-documents", min=0, max=100),
 ) -> None:
-    """Plan explicit pending IDs from an offline snapshot.
+    """Plan or explicitly execute allowlisted pending IDs.
 
-    Phase 2B-1 intentionally exposes only the read-only dry-run path.  A
-    future pilot must provide a reviewed execution adapter rather than turning
-    this command into source-wide collection.
+    The default remains the offline, read-only snapshot path.  Live execution
+    requires the explicit ``--execute-live`` gate and performs a fresh
+    authenticated per-ID preflight before opening a RETRY run.
     """
-    if not dry_run:
-        raise typer.BadParameter("--dry-run is required; live recovery is not enabled in Phase 2B-1")
+    if execute_live and dry_run:
+        raise typer.BadParameter("--dry-run cannot be combined with --execute-live")
+    if not execute_live and not dry_run:
+        raise typer.BadParameter("--dry-run is required unless --execute-live is explicitly supplied")
     try:
         loaded_manifest = load_manifest(manifest.expanduser().resolve())
-        loaded_snapshot = load_snapshot(snapshot.expanduser().resolve())
-        report = RecoveryRunner(
-            SnapshotRecoveryStore(loaded_snapshot),
-            caps=RecoveryCaps(
-                max_records=max_records,
+        defaults = RecoveryCaps()
+        if execute_live and any(
+            value is None
+            for value in (max_records, max_source_requests, max_attachments, max_ai_documents)
+        ):
+            raise ValueError(
+                "--execute-live requires explicit --max-records, --max-source-requests, "
+                "--max-attachments, and --max-ai-documents caps"
+            )
+        caps = RecoveryCaps(
+            max_records=defaults.max_records if max_records is None else max_records,
+            max_source_requests=defaults.max_source_requests
+            if max_source_requests is None
+            else max_source_requests,
+            max_attachments=defaults.max_attachments if max_attachments is None else max_attachments,
+            max_ai_documents=defaults.max_ai_documents if max_ai_documents is None else max_ai_documents,
+        )
+        if execute_live:
+            if snapshot is not None:
+                raise ValueError("--snapshot is not used with --execute-live; live preflight is authoritative")
+            if max_records is not None and max_records > 4:
+                raise ValueError("live recovery permits at most 4 records")
+            settings = Settings()
+            if not settings.synapse_internal_base_url.strip():
+                raise ValueError("SYNAPSE_INTERNAL_BASE_URL is required for --execute-live")
+            if not settings.synapse_ingestion_secret.get_secret_value().strip():
+                raise ValueError("SYNAPSE_INGESTION_SECRET is required for --execute-live")
+            with LiveRecoveryPipeline(
+                settings,
                 max_source_requests=max_source_requests,
-                max_attachments=max_attachments,
-                max_ai_documents=max_ai_documents,
-            ),
-        ).run(loaded_manifest, dry_run=True)
+                max_download_bytes=settings.synapse_daily_max_download_bytes,
+            ) as pipeline, SynapseRecoveryWriteStore(settings, loaded_manifest) as store:
+                report = RecoveryRunner(
+                    store,
+                    hooks=pipeline.hooks(),
+                    caps=caps,
+                ).run(loaded_manifest, dry_run=False)
+        else:
+            if snapshot is None:
+                raise ValueError("--snapshot is required for the read-only dry-run")
+            loaded_snapshot = load_snapshot(snapshot.expanduser().resolve())
+            report = RecoveryRunner(
+                SnapshotRecoveryStore(loaded_snapshot),
+                caps=caps,
+            ).run(loaded_manifest, dry_run=True)
     except (OSError, ValueError) as exc:
         raise typer.BadParameter(str(exc)) from exc
 

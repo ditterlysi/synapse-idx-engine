@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import json
 from datetime import datetime, timedelta
+from pathlib import Path
 from zoneinfo import ZoneInfo
 
 import pytest
@@ -89,3 +91,47 @@ def test_daily_command_refuses_when_kill_switch_is_off(monkeypatch: pytest.Monke
     result = runner.invoke(app, ["daily", "--confirm-schedule"])
     assert result.exit_code != 0
     assert "SYNAPSE_DAILY_ENABLED=true is required" in unstyle(result.output)
+
+
+def test_recovery_command_keeps_read_only_default_and_rejects_snapshot_in_live_mode(tmp_path: Path) -> None:
+    manifest = tmp_path / "manifest.json"
+    manifest.write_text(
+        json.dumps(
+            {
+                "runType": "RETRY",
+                "records": [
+                    {
+                        "disclosureId": "11111111-1111-4111-8111-111111111111",
+                        "expectedStatus": "PARTIAL",
+                        "expectedUpdatedAt": "2026-09-10T12:00:00Z",
+                        "expectedExternalId": "idx-web-test",
+                        "ticker": "TEST",
+                        "bucket": "C",
+                        "declaredAttachmentCount": 0,
+                        "expectedAttachmentHashes": [],
+                        "intendedRecoveryAction": "resume",
+                        "recoveryAllowed": True,
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    snapshot = tmp_path / "snapshot.json"
+    snapshot.write_text("{}", encoding="utf-8")
+
+    default = runner.invoke(app, ["recover-pending", "--manifest", str(manifest)])
+    assert default.exit_code != 0
+
+    live_with_snapshot = runner.invoke(
+        app,
+        [
+            "recover-pending",
+            "--manifest",
+            str(manifest),
+            "--snapshot",
+            str(snapshot),
+            "--execute-live",
+        ],
+    )
+    assert live_with_snapshot.exit_code != 0
