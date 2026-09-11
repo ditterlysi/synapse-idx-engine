@@ -7,7 +7,9 @@ import httpx
 import pytest
 
 from idx_digest.config import Settings
+from idx_digest.recovery_live_pipeline import LiveRecoveryPipeline
 from idx_digest.recovery_preflight_adapter import SynapseRecoveryPreflightStore
+from idx_digest.recovery_write_adapter import SynapseRecoveryWriteStore
 from idx_digest.recovery_runner import (
     RecoveryExecutionError,
     RecoveryManifest,
@@ -22,6 +24,14 @@ ANALYSIS_ID = UUID("22222222-2222-4222-8222-222222222222")
 FILE_ID = UUID("33333333-3333-4333-8333-333333333333")
 HASH = "a" * 64
 UPDATED_AT = "2026-09-11T01:02:03Z"
+
+
+class _NoopSummarizer:
+    model = "diagnostic-model"
+    announcement_prompt_version = "diagnostic-prompt"
+
+    def close(self) -> None:
+        return None
 
 
 def _settings(tmp_path) -> Settings:
@@ -143,6 +153,70 @@ def test_invalid_uuid_is_rejected_before_network(tmp_path) -> None:
 
     assert raised.value.code == "INVALID_UUID"
     assert calls == []
+
+
+def test_transport_failure_preserves_safe_exception_diagnostic(tmp_path) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("synthetic connection failure", request=request)
+
+    with SynapseRecoveryPreflightStore(
+        _settings(tmp_path), transport=httpx.MockTransport(handler)
+    ) as store:
+        with pytest.raises(RecoveryReadError, match="ConnectError: synthetic connection failure") as raised:
+            store.fetch_disclosure(DISCLOSURE_ID)
+
+    assert raised.value.code == "INTERNAL_API_ERROR"
+    assert "Bearer" not in str(raised.value)
+    assert "test-secret" not in str(raised.value)
+
+
+def test_live_orchestration_preflight_stops_before_source_or_retry_write(tmp_path) -> None:
+    body = _payload()
+    record = RecoveryManifestRecord(
+        disclosure_id=DISCLOSURE_ID,
+        expected_status="PARTIAL",
+        expected_updated_at=datetime(2026, 9, 11, 1, 2, 3, tzinfo=timezone.utc),
+        expected_external_id="idx-web-123",
+        ticker="BBRI",
+        bucket="C",
+        declared_attachment_count=1,
+        expected_attachment_hashes=(HASH,),
+        intended_recovery_action="diagnostic preflight",
+        recovery_allowed=True,
+    )
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        assert request.method == "GET"
+        assert request.url.path == f"/api/internal/idx/disclosures/{DISCLOSURE_ID}/preflight"
+        return httpx.Response(200, json=body, request=request)
+
+    manifest = RecoveryManifest(records=(record,))
+    with LiveRecoveryPipeline(
+        _settings(tmp_path),
+        max_source_requests=12,
+        summarizer_factory=lambda settings: _NoopSummarizer(),
+        transport=httpx.MockTransport(handler),
+        request_delay_seconds=0,
+        request_jitter_seconds=0,
+    ) as pipeline, SynapseRecoveryWriteStore(
+        _settings(tmp_path), manifest, transport=httpx.MockTransport(handler)
+    ) as store:
+        hooks = pipeline.hooks()
+        # Keep the exact live hook composition but stop before IDX source
+        # resolution so this diagnostic remains preflight-only.
+        hooks.prepare_source = None
+        report = RecoveryRunner(
+            store,
+            hooks=hooks,
+        ).run(manifest, dry_run=True)
+
+    assert report.ok is True
+    assert report.run_id is None
+    assert report.mutations == 0
+    assert report.records[0].outcome == "PLANNED"
+    assert len(requests) == 1
 
 
 @pytest.mark.parametrize(

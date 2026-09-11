@@ -74,7 +74,15 @@ class SynapseRecoveryPreflightStore(RecoveryStore):
         try:
             response = self._client.get(path)
         except httpx.TransportError as exc:
-            raise RecoveryReadError("INTERNAL_API_ERROR", "Synapse preflight request failed") from exc
+            # Keep the outward error classified as an internal API failure, but
+            # retain the transport class and safe exception text for local
+            # diagnostics.  httpx transport exceptions do not contain request
+            # headers, so the ingestion credential is never included here.
+            detail = str(exc).strip() or "no transport detail"
+            raise RecoveryReadError(
+                "INTERNAL_API_ERROR",
+                f"Synapse preflight request failed ({type(exc).__name__}: {detail})",
+            ) from exc
 
         if response.status_code >= 400:
             code = "INTERNAL_API_ERROR"
