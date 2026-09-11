@@ -13,6 +13,7 @@ from .config import Settings
 from .daily_guardrails import DailyPolicy, DailyPolicyError
 from .durable_checkpoint import SelectiveMemoryCheckpointStore
 from .idx_polite_http import CURRENT_IDX_BASE_URL, PoliteFetchClient
+from .recovery_runner import RecoveryCaps, RecoveryRunner, SnapshotRecoveryStore, load_manifest, load_snapshot
 from .source_ingestion import SourceIngestionRunner
 from .source_state_client import SourceStateSynapseClient, checkpoint_from_payload
 from .sources.idx_website import (
@@ -133,6 +134,48 @@ def health() -> None:
             indent=2,
         )
     )
+
+
+@app.command("recover-pending")
+def recover_pending(
+    manifest: Path = typer.Option(..., "--manifest", help="Immutable per-disclosure RETRY manifest JSON."),
+    snapshot: Path = typer.Option(..., "--snapshot", help="Read-only current-state snapshot JSON."),
+    dry_run: bool = typer.Option(
+        False,
+        "--dry-run",
+        help="Required Phase 2B-1 gate: preflight and budget planning only; no network or writes.",
+    ),
+    max_records: int = typer.Option(12, "--max-records", min=1, max=100),
+    max_source_requests: int = typer.Option(12, "--max-source-requests", min=0, max=100),
+    max_attachments: int = typer.Option(20, "--max-attachments", min=0, max=100),
+    max_ai_documents: int = typer.Option(20, "--max-ai-documents", min=0, max=100),
+) -> None:
+    """Plan explicit pending IDs from an offline snapshot.
+
+    Phase 2B-1 intentionally exposes only the read-only dry-run path.  A
+    future pilot must provide a reviewed execution adapter rather than turning
+    this command into source-wide collection.
+    """
+    if not dry_run:
+        raise typer.BadParameter("--dry-run is required; live recovery is not enabled in Phase 2B-1")
+    try:
+        loaded_manifest = load_manifest(manifest.expanduser().resolve())
+        loaded_snapshot = load_snapshot(snapshot.expanduser().resolve())
+        report = RecoveryRunner(
+            SnapshotRecoveryStore(loaded_snapshot),
+            caps=RecoveryCaps(
+                max_records=max_records,
+                max_source_requests=max_source_requests,
+                max_attachments=max_attachments,
+                max_ai_documents=max_ai_documents,
+            ),
+        ).run(loaded_manifest, dry_run=True)
+    except (OSError, ValueError) as exc:
+        raise typer.BadParameter(str(exc)) from exc
+
+    typer.echo(report.model_dump_json(by_alias=True, indent=2))
+    if not report.ok:
+        raise typer.Exit(code=1)
 
 
 def _run_collection(

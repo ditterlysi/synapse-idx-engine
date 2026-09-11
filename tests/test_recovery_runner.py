@@ -1,0 +1,490 @@
+from __future__ import annotations
+
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
+from uuid import UUID, uuid4
+
+import pytest
+
+from idx_digest.recovery_runner import (
+    CurrentDisclosure,
+    CurrentFile,
+    DownloadedArtifact,
+    ExtractedArtifact,
+    RecoveryCaps,
+    RecoveryHooks,
+    RecoveryManifest,
+    RecoveryManifestRecord,
+    RecoveryRunner,
+    RecoverySnapshot,
+    SnapshotRecoveryStore,
+)
+from typer.testing import CliRunner
+
+
+NOW = datetime(2026, 9, 10, 12, 0, tzinfo=timezone.utc)
+HASH = "a" * 64
+HASH_2 = "b" * 64
+
+
+def _record(
+    disclosure_id: UUID,
+    *,
+    status: str = "PARTIAL",
+    bucket: str = "C",
+    count: int = 1,
+    hashes: tuple[str, ...] = (HASH,),
+    allowed: bool = False,
+) -> RecoveryManifestRecord:
+    return RecoveryManifestRecord(
+        disclosure_id=disclosure_id,
+        expected_status=status,
+        expected_updated_at=NOW,
+        expected_external_id=f"idx-web-{disclosure_id}",
+        ticker="TEST",
+        bucket=bucket,
+        declared_attachment_count=count,
+        expected_attachment_hashes=hashes,
+        intended_recovery_action="resume",
+        recovery_allowed=allowed,
+    )
+
+
+def _current(record: RecoveryManifestRecord, *, status: str | None = None, **changes: object) -> CurrentDisclosure:
+    return CurrentDisclosure(
+        disclosure_id=record.disclosure_id,
+        external_id=record.expected_external_id,
+        ticker=record.ticker,
+        processing_status=status or record.expected_status,
+        updated_at=record.expected_updated_at,
+        is_stock_scope=True,
+        declared_attachment_count=record.declared_attachment_count,
+        attachment_hashes=record.expected_attachment_hashes,
+        **changes,
+    )
+
+
+def _manifest(record: RecoveryManifestRecord) -> RecoveryManifest:
+    return RecoveryManifest(records=(record,))
+
+
+class FakeStore:
+    def __init__(self, current: CurrentDisclosure, files: tuple[CurrentFile, ...] = ()) -> None:
+        self.current = current
+        self.files = list(files)
+        self.calls: list[tuple[str, object]] = []
+        self.fail_commit = False
+        self.mutate_on_second_fetch = False
+        self.fetch_count = 0
+
+    def fetch_disclosure(self, disclosure_id: UUID) -> CurrentDisclosure | None:
+        self.fetch_count += 1
+        if self.mutate_on_second_fetch and self.fetch_count == 2:
+            self.current = self.current.model_copy(update={"updated_at": NOW + timedelta(seconds=1)})
+        return self.current if self.current.disclosure_id == disclosure_id else None
+
+    def list_files(self, disclosure_id: UUID):
+        return tuple(item for item in self.files if item.disclosure_id == disclosure_id)
+
+    def create_retry_run(self, manifest: RecoveryManifest) -> str:
+        self.calls.append(("create_retry_run", manifest.manifest_id))
+        return "retry-run-1"
+
+    def finish_retry_run(self, run_id: str, report) -> None:
+        self.calls.append(("finish_retry_run", run_id))
+
+    def update_processing_status(self, disclosure_id: UUID, status: str) -> None:
+        self.calls.append(("status", status))
+        self.current = self.current.model_copy(update={"processing_status": status})
+
+    def upsert_file(self, disclosure_id: UUID, file: CurrentFile) -> None:
+        self.calls.append(("upsert_file", file.source_url))
+        self.files.append(file)
+
+    def commit_analysis(self, disclosure_id: UUID, analysis: object) -> None:
+        self.calls.append(("commit_analysis", analysis))
+        if self.fail_commit:
+            raise RuntimeError("RPC unavailable")
+        self.current = self.current.model_copy(update={"analysis_present": True})
+
+
+def _valid_file(record: RecoveryManifestRecord, tmp_path: Path) -> CurrentFile:
+    path = tmp_path / "document.pdf"
+    path.write_bytes(b"valid")
+    # Hash is checked against the manifest; use the matching content digest in
+    # tests that exercise cache reuse instead of the default fixture hash.
+    import hashlib
+
+    digest = hashlib.sha256(b"valid").hexdigest()
+    return CurrentFile(
+        disclosure_id=record.disclosure_id,
+        source_url="https://idx.example/document.pdf",
+        sha256=digest,
+        download_status="DOWNLOADED",
+        extraction_status="EXTRACTED",
+        extracted_text_ref="text://document",
+        local_path=path,
+    )
+
+
+def _hooks(*, fail_commit: bool = False) -> RecoveryHooks:
+    def download(current, index, expected_hash):
+        return DownloadedArtifact("https://idx.example/new.pdf", Path("new.pdf"), expected_hash or HASH)
+
+    def extract(current, file, artifact):
+        return ExtractedArtifact("text", "c" * 64, "pdf")
+
+    return RecoveryHooks(
+        download_attachment=download,
+        extract_attachment=extract,
+        analyze_document=lambda current, file, text: {"file": file.source_url, "text": text},
+        analyze_announcement=lambda current, documents: {"documents": list(documents)},
+    )
+
+
+def test_valid_partial_record_plans_ai_retry() -> None:
+    record = _record(uuid4(), count=0, hashes=())
+    store = SnapshotRecoveryStore(RecoverySnapshot(disclosures=(_current(record),)))
+    report = RecoveryRunner(store).run(_manifest(record), dry_run=True)
+    assert report.ok is True
+    assert report.records[0].action == "ATTACHMENT_DOWNLOAD"
+    assert report.mutations == 0
+
+
+def test_valid_discovered_record_plans_bounded_download() -> None:
+    record = _record(uuid4(), status="DISCOVERED")
+    store = SnapshotRecoveryStore(RecoverySnapshot(disclosures=(_current(record),)))
+    report = RecoveryRunner(store).run(_manifest(record), dry_run=True)
+    assert report.ok is True
+    assert report.source_requests == 1
+    assert report.attachments_considered == 1
+
+
+def test_stale_extracting_record_is_inspected_without_reset() -> None:
+    record = _record(uuid4(), status="EXTRACTING")
+    store = SnapshotRecoveryStore(RecoverySnapshot(disclosures=(_current(record),)))
+    report = RecoveryRunner(store).run(_manifest(record), dry_run=True)
+    assert report.records[0].action == "ATTACHMENT_DOWNLOAD"
+    assert report.records[0].action != "DISCOVERED"
+
+
+def test_id_mismatch_is_skipped() -> None:
+    record = _record(uuid4())
+    current = _current(record).model_copy(update={"disclosure_id": uuid4()})
+
+    class WrongIdStore(FakeStore):
+        def fetch_disclosure(self, disclosure_id: UUID):
+            return self.current
+
+    report = RecoveryRunner(WrongIdStore(current)).run(_manifest(record), dry_run=True)
+    assert report.skipped == 1
+    assert "disclosure_id mismatch" in report.records[0].reasons
+
+
+def test_external_id_mismatch_is_skipped() -> None:
+    record = _record(uuid4())
+    current = _current(record).model_copy(update={"external_id": "other"})
+    report = RecoveryRunner(SnapshotRecoveryStore(RecoverySnapshot(disclosures=(current,)))).run(
+        _manifest(record), dry_run=True
+    )
+    assert "external_id mismatch" in report.records[0].reasons
+
+
+def test_updated_at_concurrency_change_is_skipped() -> None:
+    record = _record(uuid4())
+    current = _current(record).model_copy(update={"updated_at": NOW + timedelta(minutes=1)})
+    report = RecoveryRunner(SnapshotRecoveryStore(RecoverySnapshot(disclosures=(current,)))).run(
+        _manifest(record), dry_run=True
+    )
+    assert "updated_at concurrency guard changed" in report.records[0].reasons
+
+
+def test_status_changed_after_manifest_is_skipped() -> None:
+    record = _record(uuid4())
+    current = _current(record, status="FAILED")
+    report = RecoveryRunner(SnapshotRecoveryStore(RecoverySnapshot(disclosures=(current,)))).run(
+        _manifest(record), dry_run=True
+    )
+    assert "processing_status changed since manifest" in report.records[0].reasons
+
+
+@pytest.mark.parametrize("bucket", ["E", "F"])
+def test_held_buckets_are_rejected(bucket: str) -> None:
+    record = _record(uuid4(), bucket=bucket)
+    current = _current(record)
+    report = RecoveryRunner(SnapshotRecoveryStore(RecoverySnapshot(disclosures=(current,)))).run(
+        _manifest(record), dry_run=True
+    )
+    assert report.held == 1
+    assert report.records[0].outcome == "HELD"
+
+
+def test_valid_cache_hash_is_reused_without_source_request(tmp_path: Path) -> None:
+    record = _record(uuid4(), count=1, hashes=(HASH_2,))
+    path = tmp_path / "document.pdf"
+    path.write_bytes(b"valid")
+    import hashlib
+
+    digest = hashlib.sha256(b"valid").hexdigest()
+    record = record.model_copy(update={"expected_attachment_hashes": (digest,)})
+    current = _current(record)
+    file = CurrentFile(
+        disclosure_id=record.disclosure_id,
+        source_url="https://idx.example/document.pdf",
+        sha256=digest,
+        download_status="DOWNLOADED",
+        extraction_status="EXTRACTED",
+        extracted_text_ref="text://document",
+        local_path=path,
+    )
+    store = SnapshotRecoveryStore(RecoverySnapshot(disclosures=(current,), files=(file,)))
+    report = RecoveryRunner(store).run(_manifest(record), dry_run=True)
+    assert report.files_reused == 1
+    assert report.source_requests == 0
+    assert report.records[0].action == "AI_ONLY_RETRY"
+
+
+def test_invalid_cache_hash_is_rejected(tmp_path: Path) -> None:
+    record = _record(uuid4())
+    path = tmp_path / "document.pdf"
+    path.write_bytes(b"wrong")
+    file = CurrentFile(
+        disclosure_id=record.disclosure_id,
+        source_url="https://idx.example/document.pdf",
+        sha256=HASH,
+        download_status="DOWNLOADED",
+        extraction_status="EXTRACTED",
+        local_path=path,
+    )
+    report = RecoveryRunner(
+        SnapshotRecoveryStore(RecoverySnapshot(disclosures=(_current(record),), files=(file,)))
+    ).run(_manifest(record), dry_run=True)
+    assert report.skipped == 1
+    assert "local cache hash mismatch" in report.records[0].reasons[0]
+
+
+def test_downloaded_hash_mismatch_fails_closed(tmp_path: Path) -> None:
+    record = _record(uuid4(), status="DISCOVERED")
+    path = tmp_path / "wrong.pdf"
+    path.write_bytes(b"wrong")
+    fake = FakeStore(_current(record))
+    hooks = _hooks()
+    hooks.download_attachment = lambda current, index, expected: DownloadedArtifact(
+        "https://idx.example/wrong.pdf", path, expected or HASH
+    )
+    report = RecoveryRunner(fake, hooks=hooks).run(_manifest(record), dry_run=False)
+    assert report.ok is False
+    assert "downloaded hash mismatch" in report.errors[0]
+
+
+def test_existing_file_is_not_duplicated(tmp_path: Path) -> None:
+    record = _record(uuid4())
+    path = tmp_path / "document.pdf"
+    path.write_bytes(b"valid")
+    import hashlib
+
+    digest = hashlib.sha256(b"valid").hexdigest()
+    record = record.model_copy(update={"expected_attachment_hashes": (digest,)})
+    current = _current(record)
+    file = CurrentFile(
+        disclosure_id=record.disclosure_id,
+        source_url="https://idx.example/document.pdf",
+        sha256=digest,
+        download_status="DOWNLOADED",
+        extraction_status="EXTRACTED",
+        extracted_text_ref="text://document",
+        local_path=path,
+    )
+    fake = FakeStore(current, (file,))
+    report = RecoveryRunner(fake, hooks=_hooks()).run(_manifest(record), dry_run=False)
+    assert report.ready == 1
+    assert not [call for call in fake.calls if call[0] == "upsert_file"]
+
+
+def test_retry_after_partial_interruption_is_resumable(tmp_path: Path) -> None:
+    record = _record(uuid4())
+    path = tmp_path / "document.pdf"
+    path.write_bytes(b"valid")
+    import hashlib
+
+    digest = hashlib.sha256(b"valid").hexdigest()
+    record = record.model_copy(update={"expected_attachment_hashes": (digest,)})
+    current = _current(record)
+    file = CurrentFile(
+        disclosure_id=record.disclosure_id,
+        source_url="https://idx.example/document.pdf",
+        sha256=digest,
+        download_status="DOWNLOADED",
+        extraction_status="EXTRACTED",
+        extracted_text_ref="text://document",
+        local_path=path,
+    )
+    fake = FakeStore(current, (file,))
+    fake.fail_commit = True
+    first = RecoveryRunner(fake, hooks=_hooks()).run(_manifest(record), dry_run=False)
+    assert first.records[0].outcome == "FAILED"
+    assert fake.current.processing_status == "PARTIAL"
+    fake.fail_commit = False
+    second = RecoveryRunner(fake, hooks=_hooks()).run(_manifest(record), dry_run=False)
+    assert second.ready == 1
+
+
+def test_source_request_cap_stops_before_execution() -> None:
+    record = _record(uuid4(), status="DISCOVERED")
+    current = _current(record)
+    fake = FakeStore(current)
+    report = RecoveryRunner(fake, caps=RecoveryCaps(max_source_requests=0)).run(_manifest(record), dry_run=False)
+    assert report.ok is False
+    assert "source-request cap exceeded" in report.errors[0]
+    assert not fake.calls
+
+
+def test_attachment_cap_stops_before_execution() -> None:
+    record = _record(uuid4(), status="DISCOVERED")
+    report = RecoveryRunner(
+        SnapshotRecoveryStore(RecoverySnapshot(disclosures=(_current(record),))),
+        caps=RecoveryCaps(max_attachments=0),
+    ).run(_manifest(record), dry_run=True)
+    assert "attachment cap exceeded" in report.errors[0]
+
+
+def test_ai_cap_stops_before_execution(tmp_path: Path) -> None:
+    record = _record(uuid4())
+    path = tmp_path / "document.pdf"
+    path.write_bytes(b"valid")
+    import hashlib
+
+    digest = hashlib.sha256(b"valid").hexdigest()
+    record = record.model_copy(update={"expected_attachment_hashes": (digest,)})
+    file = CurrentFile(
+        disclosure_id=record.disclosure_id,
+        source_url="https://idx.example/document.pdf",
+        sha256=digest,
+        download_status="DOWNLOADED",
+        extraction_status="EXTRACTED",
+        extracted_text_ref="text://document",
+        local_path=path,
+    )
+    report = RecoveryRunner(
+        SnapshotRecoveryStore(RecoverySnapshot(disclosures=(_current(record),), files=(file,))),
+        caps=RecoveryCaps(max_ai_documents=0),
+    ).run(_manifest(record), dry_run=True)
+    assert "AI-document cap exceeded" in report.errors[0]
+
+
+def test_db_rpc_failure_is_reported_and_run_is_resumable(tmp_path: Path) -> None:
+    record = _record(uuid4())
+    path = tmp_path / "document.pdf"
+    path.write_bytes(b"valid")
+    import hashlib
+
+    digest = hashlib.sha256(b"valid").hexdigest()
+    record = record.model_copy(update={"expected_attachment_hashes": (digest,)})
+    file = CurrentFile(
+        disclosure_id=record.disclosure_id,
+        source_url="https://idx.example/document.pdf",
+        sha256=digest,
+        download_status="DOWNLOADED",
+        extraction_status="EXTRACTED",
+        extracted_text_ref="text://document",
+        local_path=path,
+    )
+    fake = FakeStore(_current(record), (file,))
+    fake.fail_commit = True
+    report = RecoveryRunner(fake, hooks=_hooks()).run(_manifest(record), dry_run=False)
+    assert report.ok is False
+    assert "RPC unavailable" in report.errors[0]
+
+
+def test_checkpoint_method_is_never_called() -> None:
+    record = _record(uuid4(), count=0, hashes=())
+
+    class Guarded(SnapshotRecoveryStore):
+        def commit_checkpoint(self):
+            raise AssertionError("checkpoint must not be touched")
+
+    report = RecoveryRunner(Guarded(RecoverySnapshot(disclosures=(_current(record),)))).run(
+        _manifest(record), dry_run=True
+    )
+    assert report.checkpoint_touched is False
+
+
+def test_watermark_method_is_never_called() -> None:
+    record = _record(uuid4(), count=0, hashes=())
+
+    class Guarded(SnapshotRecoveryStore):
+        def advance_watermark(self):
+            raise AssertionError("watermark must not be touched")
+
+    report = RecoveryRunner(Guarded(RecoverySnapshot(disclosures=(_current(record),)))).run(
+        _manifest(record), dry_run=True
+    )
+    assert report.watermark_touched is False
+
+
+def test_coverage_method_is_never_called() -> None:
+    record = _record(uuid4(), count=0, hashes=())
+
+    class Guarded(SnapshotRecoveryStore):
+        def commit_coverage(self):
+            raise AssertionError("coverage must not be touched")
+
+    report = RecoveryRunner(Guarded(RecoverySnapshot(disclosures=(_current(record),)))).run(
+        _manifest(record), dry_run=True
+    )
+    assert report.coverage_touched is False
+
+
+def test_dry_run_makes_zero_mutations_and_network_hooks_are_not_called() -> None:
+    record = _record(uuid4(), status="DISCOVERED")
+    fake = FakeStore(_current(record))
+    calls: list[str] = []
+    hooks = RecoveryHooks(download_attachment=lambda *args: calls.append("download"))
+    report = RecoveryRunner(fake, hooks=hooks).run(_manifest(record), dry_run=True)
+    assert report.ok is True
+    assert report.mutations == 0
+    assert fake.calls == []
+    assert calls == []
+
+
+def test_manifest_is_immutable_and_rejects_duplicate_ids() -> None:
+    record = _record(uuid4(), count=0, hashes=())
+    with pytest.raises(ValueError, match="duplicate disclosure_id"):
+        RecoveryManifest(records=(record, record))
+    with pytest.raises(ValueError):
+        record.ticker = "OTHER"  # type: ignore[misc]
+
+
+def test_cli_recover_pending_requires_dry_run(tmp_path: Path) -> None:
+    from idx_digest.idx_website_cli import app
+
+    result = CliRunner().invoke(app, ["recover-pending", "--manifest", "m.json", "--snapshot", "s.json"])
+    assert result.exit_code != 0
+    assert "--dry-run is required" in result.output
+
+
+def test_cli_recover_pending_uses_only_offline_snapshot(tmp_path: Path) -> None:
+    from idx_digest.idx_website_cli import app
+
+    record = _record(uuid4(), status="DISCOVERED")
+    manifest_path = tmp_path / "manifest.json"
+    snapshot_path = tmp_path / "snapshot.json"
+    manifest_path.write_text(_manifest(record).model_dump_json(by_alias=True), encoding="utf-8")
+    snapshot_path.write_text(
+        RecoverySnapshot(disclosures=(_current(record),)).model_dump_json(by_alias=True),
+        encoding="utf-8",
+    )
+    result = CliRunner().invoke(
+        app,
+        [
+            "recover-pending",
+            "--manifest",
+            str(manifest_path),
+            "--snapshot",
+            str(snapshot_path),
+            "--dry-run",
+        ],
+    )
+    assert result.exit_code == 0
+    assert '"dryRun": true' in result.output
+    assert '"sourceRequests": 1' in result.output
