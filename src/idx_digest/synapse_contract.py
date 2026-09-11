@@ -93,6 +93,7 @@ class CreateRunRequest(SynapseModel):
     requested_from: str | None = None
     requested_to: str | None = None
     engine_version: str | None = Field(default=None, min_length=1, max_length=80)
+    metadata: dict[str, object] | None = None
 
 
 class CreateRunResponse(SynapseModel):
@@ -110,6 +111,7 @@ class UpdateRunRequest(SynapseModel):
     source_requests: int | None = Field(default=None, ge=0)
     error_code: str | None = Field(default=None, min_length=1, max_length=80)
     error_message: str | None = Field(default=None, min_length=1, max_length=1000)
+    metadata: dict[str, object] | None = None
 
     @model_validator(mode="after")
     def validate_terminal_status(self) -> "UpdateRunRequest":

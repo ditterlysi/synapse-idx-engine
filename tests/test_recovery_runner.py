@@ -158,6 +158,14 @@ def test_valid_discovered_record_plans_bounded_download() -> None:
     assert report.ok is True
     assert report.source_requests == 1
     assert report.attachments_considered == 1
+    result = report.records[0]
+    assert result.ticker == record.ticker
+    assert result.before_status == "DISCOVERED"
+    assert result.source_requests == 1
+    assert result.attachments_selected == 1
+    assert result.files_downloaded == 1
+    assert result.ai_document_calls == 1
+    assert result.announcement_analysis == "NOT_RUN"
 
 
 def test_stale_extracting_record_is_inspected_without_reset() -> None:
@@ -228,6 +236,32 @@ def test_partial_attachment_hash_metadata_remains_a_valid_precondition() -> None
         SnapshotRecoveryStore(RecoverySnapshot(disclosures=(current,)))
     ).run(_manifest(record), dry_run=True)
     assert report.records[0].outcome == "PLANNED"
+
+
+def test_partial_attachment_metadata_allows_unknown_cached_hash(tmp_path: Path) -> None:
+    record = _record(uuid4(), count=2, hashes=(HASH,))
+    path = tmp_path / "unknown.pdf"
+    path.write_bytes(b"unknown cached attachment")
+    import hashlib
+
+    unknown_digest = hashlib.sha256(path.read_bytes()).hexdigest()
+    file = CurrentFile(
+        disclosure_id=record.disclosure_id,
+        source_url="https://idx.example/unknown.pdf",
+        sha256=unknown_digest,
+        download_status="DOWNLOADED",
+        extraction_status="EXTRACTED",
+        extracted_text_ref="text://unknown",
+        local_path=path,
+    )
+    report = RecoveryRunner(
+        SnapshotRecoveryStore(RecoverySnapshot(disclosures=(_current(record),), files=(file,)))
+    ).run(_manifest(record), dry_run=True)
+
+    assert report.records[0].outcome == "PLANNED"
+    assert report.records[0].action == "ATTACHMENT_DOWNLOAD"
+    assert report.files_reused == 1
+    assert report.source_requests == 1
 
 
 def test_status_changed_after_manifest_is_skipped() -> None:
@@ -330,6 +364,33 @@ def test_existing_file_is_not_duplicated(tmp_path: Path) -> None:
     report = RecoveryRunner(fake, hooks=_hooks()).run(_manifest(record), dry_run=False)
     assert report.ready == 1
     assert not [call for call in fake.calls if call[0] == "upsert_file"]
+    result = report.records[0]
+    assert result.before_status == "PARTIAL"
+    assert result.after_status == "READY"
+    assert result.files_reused == 1
+    assert result.ai_document_calls == 1
+    assert result.announcement_analysis == "SUCCEEDED"
+    assert result.db_commits == 4
+
+
+def test_live_execution_refreshes_preflight_before_first_mutation() -> None:
+    record = _record(uuid4(), count=0, hashes=())
+
+    class RefreshStore(FakeStore):
+        def __init__(self) -> None:
+            super().__init__(_current(record))
+            self.refresh_count = 0
+
+        def refresh_disclosure(self, disclosure_id: UUID):
+            self.refresh_count += 1
+            return self.fetch_disclosure(disclosure_id)
+
+    store = RefreshStore()
+    report = RecoveryRunner(store, hooks=_hooks()).run(_manifest(record), dry_run=False)
+
+    assert report.ok is True
+    assert store.refresh_count == 1
+    assert store.calls[0] == ("create_retry_run", report.manifest_id)
 
 
 def test_retry_after_partial_interruption_is_resumable(tmp_path: Path) -> None:
@@ -476,6 +537,63 @@ def test_dry_run_makes_zero_mutations_and_network_hooks_are_not_called() -> None
     assert report.mutations == 0
     assert fake.calls == []
     assert calls == []
+
+
+def test_live_precondition_failure_stops_before_later_record() -> None:
+    first = _record(uuid4())
+    second = _record(uuid4())
+    current = {
+        first.disclosure_id: _current(first, status="FAILED"),
+        second.disclosure_id: _current(second),
+    }
+
+    class MultiStore(FakeStore):
+        def __init__(self) -> None:
+            self.calls = []
+            self.fetch_count = 0
+            self.current = current[first.disclosure_id]
+
+        def fetch_disclosure(self, disclosure_id: UUID):
+            self.fetch_count += 1
+            return current.get(disclosure_id)
+
+    store = MultiStore()
+    report = RecoveryRunner(store).run(
+        RecoveryManifest(records=(first, second)),
+        dry_run=False,
+    )
+
+    assert report.ok is False
+    assert report.records[0].outcome == "PRECONDITION_FAILED"
+    assert len(report.records) == 1
+    assert not [call for call in store.calls if call[0] == "create_retry_run"]
+
+
+def test_record_observer_receives_serial_results() -> None:
+    first = _record(uuid4(), count=0, hashes=())
+    second = _record(uuid4(), count=0, hashes=())
+    observed: list[UUID] = []
+
+    class MultiStore(FakeStore):
+        def __init__(self) -> None:
+            self.calls = []
+            self.fetch_count = 0
+            self.current = None
+            self.files = []
+
+        def fetch_disclosure(self, disclosure_id: UUID):
+            self.fetch_count += 1
+            return _current(first if disclosure_id == first.disclosure_id else second)
+
+    multi = MultiStore()
+    report = RecoveryRunner(multi).run(
+        RecoveryManifest(records=(first, second)),
+        dry_run=True,
+        on_record_result=lambda result: observed.append(result.disclosure_id),
+    )
+
+    assert report.ok is True
+    assert observed == [first.disclosure_id, second.disclosure_id]
 
 
 def test_manifest_is_immutable_and_rejects_duplicate_ids() -> None:

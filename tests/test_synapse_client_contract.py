@@ -63,6 +63,7 @@ def test_create_run_and_relevance_use_camel_case_contract() -> None:
                 requested_from="2026-08-21T00:00:00Z",
                 requested_to="2026-08-21T01:00:00Z",
                 engine_version="0.16.0",
+                metadata={"recovery": {"kind": "test"}},
             )
         )
         relevance = client.resolve_relevance([" bbri ", "ANTM", "BBRI"])
@@ -75,6 +76,7 @@ def test_create_run_and_relevance_use_camel_case_contract() -> None:
         "requestedFrom": "2026-08-21T00:00:00Z",
         "requestedTo": "2026-08-21T01:00:00Z",
         "engineVersion": "0.16.0",
+        "metadata": {"recovery": {"kind": "test"}},
     }
     assert seen["/api/internal/idx/relevance"] == {"tickers": ["BBRI", "ANTM"]}
 

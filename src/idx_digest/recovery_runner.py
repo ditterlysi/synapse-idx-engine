@@ -41,6 +41,7 @@ RecoveryReadErrorCode = Literal[
     "WRONG_SOURCE",
     "INTERNAL_API_ERROR",
 ]
+RecoveryRecordObserver = Callable[["RecoveryRecordResult"], None]
 
 
 def _to_camel(value: str) -> str:
@@ -312,6 +313,9 @@ class RecoveryPreflight(RecoveryModel):
 
 class RecoveryRecordResult(RecoveryModel):
     disclosure_id: UUID
+    ticker: str | None = None
+    before_status: ProcessingStatus | None = None
+    after_status: ProcessingStatus | None = None
     outcome: Literal[
         "PLANNED",
         "READY",
@@ -323,6 +327,14 @@ class RecoveryRecordResult(RecoveryModel):
     ]
     action: RecoveryAction
     reasons: tuple[str, ...] = ()
+    source_requests: int = 0
+    attachments_selected: int = 0
+    files_downloaded: int = 0
+    files_reused: int = 0
+    extraction_count: int = 0
+    ai_document_calls: int = 0
+    announcement_analysis: Literal["NOT_RUN", "SUCCEEDED", "FAILED"] = "NOT_RUN"
+    db_commits: int = 0
 
 
 class RecoveryRunReport(RecoveryModel):
@@ -344,6 +356,7 @@ class RecoveryRunReport(RecoveryModel):
     extraction_count: int = 0
     ai_document_requests: int = 0
     announcement_analyses: int = 0
+    db_commits: int = 0
     errors: tuple[str, ...] = ()
     records: tuple[RecoveryRecordResult, ...] = ()
     mutations: int = 0
@@ -429,22 +442,35 @@ class RecoveryHooks:
 @dataclass
 class _Plan:
     preflight: RecoveryPreflight
+    current: CurrentDisclosure | None = None
     files: tuple[CurrentFile, ...] = ()
     valid_cached_files: tuple[CurrentFile, ...] = ()
-    download_hashes: tuple[str, ...] = ()
+    download_hashes: tuple[str | None, ...] = ()
+
+
+@dataclass
+class _ExecutionMetrics:
+    source_requests: int = 0
+    files_downloaded: int = 0
+    extraction_count: int = 0
+    ai_document_calls: int = 0
+    announcement_analyses: int = 0
+    db_commits: int = 0
+    after_status: ProcessingStatus | None = None
+    analysis_result: Literal["NOT_RUN", "SUCCEEDED", "FAILED"] = "NOT_RUN"
 
 
 def _download_hashes(
     expected_hashes: tuple[str, ...],
     files: Sequence[CurrentFile],
     attachments_needed: int,
-) -> tuple[str, ...]:
+) -> tuple[str | None, ...]:
     if attachments_needed <= 0:
         return ()
     represented = [file.sha256 for file in files if file.sha256]
     candidates = [digest for digest in expected_hashes if digest not in represented]
     if len(candidates) < attachments_needed:
-        candidates.extend(expected_hashes)
+        candidates.extend([None] * (attachments_needed - len(candidates)))
     return tuple(candidates[:attachments_needed])
 
 
@@ -456,7 +482,11 @@ def _file_sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
-def _cache_is_valid(file: CurrentFile, expected_hashes: tuple[str, ...]) -> bool:
+def _cache_is_valid(
+    file: CurrentFile,
+    expected_hashes: tuple[str, ...],
+    declared_attachment_count: int,
+) -> bool:
     if file.download_status != "DOWNLOADED" or file.extraction_status != "EXTRACTED":
         return False
     if file.local_path is not None:
@@ -465,13 +495,17 @@ def _cache_is_valid(file: CurrentFile, expected_hashes: tuple[str, ...]) -> bool
         actual = _file_sha256(file.local_path)
         if file.sha256 and actual != file.sha256:
             raise RecoveryHashMismatch(f"{file.source_url}: local cache hash mismatch")
-        if expected_hashes and actual not in expected_hashes:
+        if len(expected_hashes) >= declared_attachment_count and actual not in expected_hashes:
             raise RecoveryHashMismatch(f"{file.source_url}: cache hash is not in manifest")
         return True
     # A durable extracted-text reference means the existing pipeline can reuse
     # the artifact without another source request.  There is no local path to
     # hash in this case; the DB hash remains the audit value.
-    return bool(file.extracted_text_ref and file.sha256 and file.sha256 in expected_hashes)
+    return bool(
+        file.extracted_text_ref
+        and file.sha256
+        and (len(expected_hashes) < declared_attachment_count or file.sha256 in expected_hashes)
+    )
 
 
 class SnapshotRecoveryStore:
@@ -541,7 +575,8 @@ class RecoveryRunner:
                     outcome="PRECONDITION_FAILED",
                     action="MANUAL_REVIEW",
                     reasons=tuple(reasons),
-                )
+                ),
+                current=current,
             )
         if record.bucket in {"E", "F"} and not record.recovery_allowed:
             return _Plan(
@@ -550,7 +585,8 @@ class RecoveryRunner:
                     outcome="HELD",
                     action="HELD",
                     reasons=(f"bucket {record.bucket} requires explicit recovery_allowed=true",),
-                )
+                ),
+                current=current,
             )
 
         files = tuple(self.store.list_files(record.disclosure_id))
@@ -568,6 +604,7 @@ class RecoveryRunner:
                     action="MANUAL_REVIEW",
                     reasons=tuple(reasons),
                 ),
+                current=current,
                 files=files,
             )
         # A completed analysis is a safe idempotent no-op.  The identity and
@@ -581,6 +618,7 @@ class RecoveryRunner:
                     action="NOOP",
                     reasons=("record already has a committed analysis",),
                 ),
+                current=current,
                 files=files,
             )
 
@@ -588,7 +626,11 @@ class RecoveryRunner:
         cache_errors: list[str] = []
         for file in files:
             try:
-                if _cache_is_valid(file, record.expected_attachment_hashes):
+                if _cache_is_valid(
+                    file,
+                    record.expected_attachment_hashes,
+                    record.declared_attachment_count,
+                ):
                     valid.append(file)
             except RecoveryHashMismatch as exc:
                 cache_errors.append(str(exc))
@@ -600,6 +642,7 @@ class RecoveryRunner:
                     action="MANUAL_REVIEW",
                     reasons=tuple(cache_errors),
                 ),
+                current=current,
                 files=files,
             )
 
@@ -645,6 +688,7 @@ class RecoveryRunner:
                 ai_documents_needed=ai_documents,
                 announcement_analyses_needed=announcement,
             ),
+            current=current,
             files=files,
             valid_cached_files=tuple(valid),
             download_hashes=_download_hashes(record.expected_attachment_hashes, files, attachments_needed),
@@ -660,7 +704,74 @@ class RecoveryRunner:
             errors=(message,),
         )
 
-    def run(self, manifest: RecoveryManifest, *, dry_run: bool = True) -> RecoveryRunReport:
+    @staticmethod
+    def _record_result(
+        record: RecoveryManifestRecord,
+        plan: _Plan,
+        outcome: Literal[
+            "PLANNED",
+            "READY",
+            "SKIPPED",
+            "HELD",
+            "FAILED",
+            "ALREADY_READY",
+            "PRECONDITION_FAILED",
+        ],
+        *,
+        reasons: Sequence[str] = (),
+        metrics: _ExecutionMetrics | None = None,
+    ) -> RecoveryRecordResult:
+        preflight = plan.preflight
+        planned = outcome == "PLANNED"
+        selected = preflight.attachments_considered if outcome in {"PLANNED", "READY", "FAILED"} else 0
+        if metrics is None:
+            extraction_count = (
+                preflight.attachments_considered
+                if planned and preflight.action
+                in {"ATTACHMENT_DOWNLOAD", "METADATA_PROCESS_RESUME", "EXTRACTION_RESUME"}
+                else 0
+            )
+            source_requests = preflight.source_requests_needed if planned else 0
+            files_downloaded = preflight.attachments_needed if planned else 0
+            files_reused = preflight.files_reused if planned else 0
+            ai_document_calls = preflight.ai_documents_needed if planned else 0
+            analysis_result: Literal["NOT_RUN", "SUCCEEDED", "FAILED"] = "NOT_RUN"
+            after_status = plan.current.processing_status if outcome == "ALREADY_READY" and plan.current else None
+            db_commits = 0
+        else:
+            extraction_count = metrics.extraction_count
+            source_requests = metrics.source_requests
+            files_downloaded = metrics.files_downloaded
+            files_reused = preflight.files_reused
+            ai_document_calls = metrics.ai_document_calls
+            analysis_result = metrics.analysis_result
+            after_status = metrics.after_status
+            db_commits = metrics.db_commits
+        return RecoveryRecordResult(
+            disclosure_id=record.disclosure_id,
+            ticker=record.ticker,
+            before_status=plan.current.processing_status if plan.current else None,
+            after_status=after_status,
+            outcome=outcome,
+            action=preflight.action,
+            reasons=tuple(reasons),
+            source_requests=source_requests,
+            attachments_selected=selected,
+            files_downloaded=files_downloaded,
+            files_reused=files_reused,
+            extraction_count=extraction_count,
+            ai_document_calls=ai_document_calls,
+            announcement_analysis=analysis_result,
+            db_commits=db_commits,
+        )
+
+    def run(
+        self,
+        manifest: RecoveryManifest,
+        *,
+        dry_run: bool = True,
+        on_record_result: RecoveryRecordObserver | None = None,
+    ) -> RecoveryRunReport:
         self._manifest = manifest
         self._dry_run = dry_run
         if manifest.run_type != "RETRY":
@@ -668,30 +779,85 @@ class RecoveryRunner:
         if len(manifest.records) > self.caps.max_records:
             return self._cap_error(f"record cap exceeded: {len(manifest.records)} > {self.caps.max_records}")
 
-        plans = [self._preflight(record) for record in manifest.records]
-        source_requests = sum(plan.preflight.source_requests_needed for plan in plans)
-        attachments = sum(plan.preflight.attachments_considered for plan in plans)
-        ai_documents = sum(plan.preflight.ai_documents_needed for plan in plans)
-        if source_requests > self.caps.max_source_requests:
-            return self._cap_error(f"source-request cap exceeded: {source_requests} > {self.caps.max_source_requests}")
-        if attachments > self.caps.max_attachments:
-            return self._cap_error(f"attachment cap exceeded: {attachments} > {self.caps.max_attachments}")
-        if ai_documents > self.caps.max_ai_documents:
-            return self._cap_error(f"AI-document cap exceeded: {ai_documents} > {self.caps.max_ai_documents}")
-
         records: list[RecoveryRecordResult] = []
+
+        def emit(result: RecoveryRecordResult) -> None:
+            records.append(result)
+            if on_record_result is not None:
+                on_record_result(result)
+
+        plans: list[_Plan] = []
+        for record in manifest.records:
+            plan = self._preflight(record)
+            plans.append(plan)
+            if not dry_run and plan.preflight.outcome not in {"READY", "ALREADY_READY"}:
+                result = self._record_result(
+                    record,
+                    plan,
+                    (
+                        "PRECONDITION_FAILED"
+                        if plan.preflight.outcome in {"PRECONDITION_FAILED", "SKIP"}
+                        else "HELD"
+                    ),
+                    reasons=plan.preflight.reasons,
+                )
+                emit(result)
+                return RecoveryRunReport(
+                    manifest_id=manifest.manifest_id,
+                    manifest_digest=manifest.digest,
+                    dry_run=False,
+                    ok=False,
+                    planned_records=len(manifest.records),
+                    skipped=1 if result.outcome == "PRECONDITION_FAILED" else 0,
+                    held=1 if result.outcome == "HELD" else 0,
+                    errors=(
+                        f"{result.outcome}: {('; '.join(result.reasons)) or 'record cannot proceed'}",
+                    ),
+                    records=tuple(records),
+                    mutations=0,
+                )
+        planned_source_requests = sum(plan.preflight.source_requests_needed for plan in plans)
+        planned_attachments = sum(plan.preflight.attachments_considered for plan in plans)
+        planned_ai_documents = sum(plan.preflight.ai_documents_needed for plan in plans)
+        if planned_source_requests > self.caps.max_source_requests:
+            return self._cap_error(
+                f"source-request cap exceeded: {planned_source_requests} > {self.caps.max_source_requests}"
+            )
+        if planned_attachments > self.caps.max_attachments:
+            return self._cap_error(
+                f"attachment cap exceeded: {planned_attachments} > {self.caps.max_attachments}"
+            )
+        if planned_ai_documents > self.caps.max_ai_documents:
+            return self._cap_error(
+                f"AI-document cap exceeded: {planned_ai_documents} > {self.caps.max_ai_documents}"
+            )
+
         errors: list[str] = []
-        skipped = held = ready = attempted = mutations = 0
-        files_reused = sum(plan.preflight.files_reused for plan in plans)
-        files_downloaded = sum(
-            plan.preflight.attachments_needed
-            for plan in plans
-            if plan.preflight.action in {"ATTACHMENT_DOWNLOAD", "METADATA_PROCESS_RESUME"}
+        skipped = held = ready = attempted = mutations = db_commits = 0
+        source_requests = planned_source_requests if dry_run else 0
+        attachments = planned_attachments if dry_run else 0
+        ai_documents = planned_ai_documents if dry_run else 0
+        files_reused = sum(plan.preflight.files_reused for plan in plans) if dry_run else 0
+        files_downloaded = (
+            sum(
+                plan.preflight.attachments_needed
+                for plan in plans
+                if plan.preflight.action in {"ATTACHMENT_DOWNLOAD", "METADATA_PROCESS_RESUME"}
+            )
+            if dry_run
+            else 0
         )
-        extraction_count = sum(
-            plan.preflight.attachments_considered
-            for plan in plans
-            if plan.preflight.action in {"ATTACHMENT_DOWNLOAD", "METADATA_PROCESS_RESUME", "EXTRACTION_RESUME"}
+        extraction_count = (
+            sum(
+                plan.preflight.attachments_considered
+                for plan in plans
+                if plan.preflight.action in {"ATTACHMENT_DOWNLOAD", "METADATA_PROCESS_RESUME", "EXTRACTION_RESUME"}
+            )
+            if dry_run
+            else 0
+        )
+        announcement_analyses = (
+            sum(plan.preflight.announcement_analyses_needed for plan in plans) if dry_run else 0
         )
         run_id: str | None = None
         execution_candidates = sum(plan.preflight.outcome == "READY" for plan in plans)
@@ -716,37 +882,33 @@ class RecoveryRunner:
             preflight = plan.preflight
             if preflight.outcome in {"SKIP", "PRECONDITION_FAILED"}:
                 skipped += 1
-                records.append(
-                    RecoveryRecordResult(
-                        disclosure_id=record.disclosure_id,
-                        outcome=(
-                            "PRECONDITION_FAILED"
-                            if preflight.outcome == "PRECONDITION_FAILED"
-                            else "SKIPPED"
-                        ),
-                        action=preflight.action,
+                emit(
+                    self._record_result(
+                        record,
+                        plan,
+                        "PRECONDITION_FAILED" if preflight.outcome == "PRECONDITION_FAILED" else "SKIPPED",
                         reasons=preflight.reasons,
                     )
                 )
                 continue
             if preflight.outcome == "HELD":
                 held += 1
-                records.append(
-                    RecoveryRecordResult(
-                        disclosure_id=record.disclosure_id,
-                        outcome="HELD",
-                        action="HELD",
+                emit(
+                    self._record_result(
+                        record,
+                        plan,
+                        "HELD",
                         reasons=preflight.reasons,
                     )
                 )
                 continue
             if preflight.outcome == "ALREADY_READY":
                 ready += 1
-                records.append(
-                    RecoveryRecordResult(
-                        disclosure_id=record.disclosure_id,
-                        outcome="ALREADY_READY",
-                        action="NOOP",
+                emit(
+                    self._record_result(
+                        record,
+                        plan,
+                        "ALREADY_READY",
                         reasons=preflight.reasons,
                     )
                 )
@@ -754,27 +916,28 @@ class RecoveryRunner:
 
             attempted += 1
             if dry_run:
-                records.append(
-                    RecoveryRecordResult(
-                        disclosure_id=record.disclosure_id,
-                        outcome="PLANNED",
-                        action=preflight.action,
-                    )
+                emit(
+                    self._record_result(record, plan, "PLANNED")
                 )
                 continue
 
+            metrics = _ExecutionMetrics()
             try:
-                self._execute_record(record, plan)
+                self._execute_record(record, plan, metrics)
                 ready += 1
                 mutations += 1
-                records.append(
-                    RecoveryRecordResult(
-                        disclosure_id=record.disclosure_id,
-                        outcome="READY",
-                        action=preflight.action,
-                    )
-                )
+                db_commits += metrics.db_commits
+                result = self._record_result(record, plan, "READY", metrics=metrics)
+                source_requests += result.source_requests
+                attachments += result.attachments_selected
+                files_reused += result.files_reused
+                files_downloaded += result.files_downloaded
+                extraction_count += result.extraction_count
+                ai_documents += result.ai_document_calls
+                announcement_analyses += metrics.announcement_analyses
+                emit(result)
             except Exception as exc:  # fail the record, preserve resumability
+                db_commits += metrics.db_commits
                 errors.append(f"{record.expected_external_id}: {type(exc).__name__}: {exc}")
                 # Leave the row in the existing resumable PARTIAL state when a
                 # stage fails.  A future invocation must create a fresh
@@ -784,19 +947,22 @@ class RecoveryRunner:
                     current = self.store.fetch_disclosure(record.disclosure_id)
                     if current is not None and current.processing_status in {"EXTRACTING", "ANALYZING"}:
                         self.store.update_processing_status(record.disclosure_id, "PARTIAL")
+                        metrics.db_commits += 1
+                        metrics.after_status = "PARTIAL"
                 except Exception as status_exc:
                     errors.append(
                         f"{record.expected_external_id}: could not preserve PARTIAL state: "
                         f"{type(status_exc).__name__}: {status_exc}"
                     )
-                records.append(
-                    RecoveryRecordResult(
-                        disclosure_id=record.disclosure_id,
-                        outcome="FAILED",
-                        action=preflight.action,
-                        reasons=(str(exc),),
-                    )
-                )
+                result = self._record_result(record, plan, "FAILED", reasons=(str(exc),), metrics=metrics)
+                source_requests += result.source_requests
+                attachments += result.attachments_selected
+                files_reused += result.files_reused
+                files_downloaded += result.files_downloaded
+                extraction_count += result.extraction_count
+                ai_documents += result.ai_document_calls
+                announcement_analyses += metrics.announcement_analyses
+                emit(result)
                 break
 
         report = RecoveryRunReport(
@@ -816,7 +982,8 @@ class RecoveryRunner:
             files_downloaded=files_downloaded,
             extraction_count=extraction_count,
             ai_document_requests=ai_documents,
-            announcement_analyses=sum(plan.preflight.announcement_analyses_needed for plan in plans),
+            announcement_analyses=announcement_analyses,
+            db_commits=db_commits,
             errors=tuple(errors),
             records=tuple(records),
             mutations=0 if dry_run else mutations,
@@ -833,8 +1000,18 @@ class RecoveryRunner:
                 )
         return report
 
-    def _execute_record(self, record: RecoveryManifestRecord, plan: _Plan) -> None:
-        current = self.store.fetch_disclosure(record.disclosure_id)
+    def _execute_record(
+        self,
+        record: RecoveryManifestRecord,
+        plan: _Plan,
+        metrics: _ExecutionMetrics,
+    ) -> None:
+        refresh_disclosure = getattr(self.store, "refresh_disclosure", None)
+        current = (
+            refresh_disclosure(record.disclosure_id)
+            if callable(refresh_disclosure)
+            else self.store.fetch_disclosure(record.disclosure_id)
+        )
         if current is None:
             raise RecoveryPreflightError("PRECONDITION_FAILED: disclosure disappeared during execution")
         mismatch_reasons = _manifest_mismatch_reasons(record, current)
@@ -850,6 +1027,8 @@ class RecoveryRunner:
         # existing processing-status API.  There is no path here for coverage,
         # checkpoint, watermark, discovery-cursor, or stock-scope writes.
         self.store.update_processing_status(record.disclosure_id, "EXTRACTING")
+        metrics.db_commits += 1
+        metrics.after_status = "EXTRACTING"
         files_to_analyze: list[CurrentFile] = list(plan.valid_cached_files)
 
         if action in {"ATTACHMENT_DOWNLOAD", "METADATA_PROCESS_RESUME"}:
@@ -858,13 +1037,15 @@ class RecoveryRunner:
             if self.hooks.extract_attachment is None:
                 raise RecoveryExecutionError("extraction hook is required for attachment recovery")
             for index, expected_hash in enumerate(plan.download_hashes):
+                metrics.source_requests += 1
                 artifact = self.hooks.download_attachment(current, index, expected_hash)
                 if not artifact.path.exists() or not artifact.path.is_file():
                     raise RecoveryExecutionError(f"{artifact.source_url}: downloaded artifact is unavailable")
                 actual = _file_sha256(artifact.path)
                 declared = artifact.sha256.lower()
-                if declared != actual or actual != expected_hash:
+                if declared != actual or (expected_hash is not None and actual != expected_hash):
                     raise RecoveryHashMismatch(f"{artifact.source_url}: downloaded hash mismatch")
+                metrics.files_downloaded += 1
                 file = CurrentFile(
                     disclosure_id=record.disclosure_id,
                     source_url=artifact.source_url,
@@ -874,6 +1055,7 @@ class RecoveryRunner:
                     local_path=artifact.path,
                 )
                 extracted = self.hooks.extract_attachment(current, file, artifact)
+                metrics.extraction_count += 1
                 file = file.model_copy(
                     update={
                         "extraction_status": "EXTRACTED",
@@ -884,6 +1066,7 @@ class RecoveryRunner:
                 # URL, so duplicate file rows cannot be fabricated here.
                 if not any(existing.source_url == file.source_url for existing in plan.files):
                     self.store.upsert_file(record.disclosure_id, file)
+                    metrics.db_commits += 1
                 files_to_analyze.append(file)
             for file in plan.files:
                 if file in plan.valid_cached_files:
@@ -898,6 +1081,7 @@ class RecoveryRunner:
                     sha256=file.sha256 or _file_sha256(file.local_path),
                 )
                 extracted = self.hooks.extract_attachment(current, file, artifact)
+                metrics.extraction_count += 1
                 updated = file.model_copy(
                     update={
                         "extraction_status": "EXTRACTED",
@@ -905,6 +1089,7 @@ class RecoveryRunner:
                     }
                 )
                 self.store.upsert_file(record.disclosure_id, updated)
+                metrics.db_commits += 1
                 files_to_analyze.append(updated)
         elif action == "EXTRACTION_RESUME":
             if self.hooks.extract_attachment is None:
@@ -921,6 +1106,7 @@ class RecoveryRunner:
                     sha256=file.sha256 or _file_sha256(file.local_path),
                 )
                 extracted = self.hooks.extract_attachment(current, file, artifact)
+                metrics.extraction_count += 1
                 updated = file.model_copy(
                     update={
                         "download_status": "DOWNLOADED",
@@ -929,16 +1115,33 @@ class RecoveryRunner:
                     }
                 )
                 self.store.upsert_file(record.disclosure_id, updated)
+                metrics.db_commits += 1
                 files_to_analyze.append(updated)
 
         self.store.update_processing_status(record.disclosure_id, "ANALYZING")
+        metrics.db_commits += 1
+        metrics.after_status = "ANALYZING"
+        metrics.analysis_result = "FAILED"
         documents: list[object] = []
         for file in files_to_analyze:
             text = file.extracted_text_ref or ""
+            metrics.ai_document_calls += 1
             documents.append(self.hooks.analyze_document(current, file, text))
+        metrics.announcement_analyses += 1
         announcement = self.hooks.analyze_announcement(current, documents)
         self.store.commit_analysis(record.disclosure_id, announcement)
+        metrics.db_commits += 1
         self.store.update_processing_status(record.disclosure_id, "READY")
+        metrics.db_commits += 1
+        metrics.after_status = "READY"
+        verified = self.store.fetch_disclosure(record.disclosure_id)
+        if verified is None:
+            raise RecoveryExecutionError("postcondition failed: disclosure disappeared after analysis commit")
+        if verified.processing_status != "READY" or not verified.analysis_present:
+            raise RecoveryExecutionError(
+                "postcondition failed: recovery did not produce READY with an active analysis"
+            )
+        metrics.analysis_result = "SUCCEEDED"
 
 
 def load_manifest(path: Path) -> RecoveryManifest:
@@ -963,6 +1166,7 @@ __all__ = [
     "RecoveryManifestRecord",
     "RecoveryPreflightError",
     "RecoveryPreflight",
+    "RecoveryRecordObserver",
     "RecoveryReadError",
     "RecoveryRunner",
     "RecoveryRunnerError",

@@ -116,6 +116,22 @@ def test_exact_id_adapter_fetches_and_maps_file_analysis_state(tmp_path) -> None
     assert len(requests) == 1
 
 
+def test_refresh_disclosure_invalidates_cached_preflight(tmp_path) -> None:
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(200, json=_payload(), request=request)
+
+    with SynapseRecoveryPreflightStore(
+        _settings(tmp_path), transport=httpx.MockTransport(handler)
+    ) as store:
+        store.fetch_disclosure(DISCLOSURE_ID)
+        store.refresh_disclosure(DISCLOSURE_ID)
+
+    assert len(requests) == 2
+
+
 def test_invalid_uuid_is_rejected_before_network(tmp_path) -> None:
     calls: list[httpx.Request] = []
     with SynapseRecoveryPreflightStore(

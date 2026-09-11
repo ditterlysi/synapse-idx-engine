@@ -44,6 +44,17 @@ class SynapseRecoveryPreflightStore(RecoveryStore):
     def __exit__(self, exc_type: object, exc: object, traceback: object) -> None:
         self.close()
 
+    def invalidate(self, disclosure_id: UUID | str) -> None:
+        """Drop one cached preflight after a successful write."""
+
+        self._responses.pop(self._disclosure_uuid(disclosure_id), None)
+
+    def refresh_disclosure(self, disclosure_id: UUID) -> CurrentDisclosure | None:
+        """Fetch one disclosure again for the final pre-mutation guard."""
+
+        self.invalidate(disclosure_id)
+        return self.fetch_disclosure(disclosure_id)
+
     @staticmethod
     def _disclosure_uuid(disclosure_id: UUID | str) -> UUID:
         if isinstance(disclosure_id, UUID):
