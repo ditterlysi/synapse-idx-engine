@@ -363,6 +363,10 @@ class RecoveryRunReport(RecoveryModel):
     checkpoint_touched: bool = False
     watermark_touched: bool = False
     coverage_touched: bool = False
+    metrics_scope: Literal["CURRENT_INVOCATION"] = "CURRENT_INVOCATION"
+    retry_run_created: bool = False
+    finalization_status: Literal["NOT_REQUIRED", "SUCCEEDED", "FAILED"] = "NOT_REQUIRED"
+    mutations_this_invocation: int = 0
 
 
 class RecoveryRunnerError(RuntimeError):
@@ -465,6 +469,7 @@ class RecoveryHooks:
     analyze_document: Callable[[CurrentDisclosure, CurrentFile, str], object] | None = None
     analyze_announcement: Callable[[CurrentDisclosure, Sequence[object]], object] | None = None
     prepare_source: Callable[[CurrentDisclosure, RecoveryManifestRecord, Sequence[CurrentFile]], RecoverySourcePlan] | None = None
+    resolve_local_file: Callable[[CurrentDisclosure, CurrentFile], CurrentFile] | None = None
     source_request_counter: Callable[[], int] | None = None
 
 
@@ -621,6 +626,23 @@ class RecoveryRunner:
             )
 
         files = tuple(self.store.list_files(record.disclosure_id))
+        if self.hooks.resolve_local_file is not None:
+            try:
+                files = tuple(
+                    self.hooks.resolve_local_file(current, file)
+                    for file in files
+                )
+            except Exception as exc:
+                return _Plan(
+                    RecoveryPreflight(
+                        disclosure_id=record.disclosure_id,
+                        outcome="PRECONDITION_FAILED",
+                        action="MANUAL_REVIEW",
+                        reasons=(f"CACHE_RESOLUTION_FAILED: {type(exc).__name__}: {exc}",),
+                    ),
+                    current=current,
+                    files=files,
+                )
         if any(file.disclosure_id != record.disclosure_id for file in files):
             reasons.append("stored file belongs to another disclosure")
         if len(files) > record.declared_attachment_count:
@@ -912,8 +934,16 @@ class RecoveryRunner:
             )
 
         errors: list[str] = []
-        skipped = held = ready = attempted = mutations = db_commits = 0
-        source_requests = planned_source_requests if dry_run else 0
+        skipped = held = ready = attempted = db_commits = 0
+        # Source metadata lookups happen during read-only preflight for every
+        # manifest record, including records that are never reached after an
+        # interruption.  Count those requests up front; per-record absorption
+        # below adds only the post-plan download requests.
+        source_requests = (
+            planned_source_requests
+            if dry_run
+            else sum(plan.source_plan.metadata_requests for plan in plans if plan.source_plan is not None)
+        )
         attachments = planned_attachments if dry_run else 0
         ai_documents = planned_ai_documents if dry_run else 0
         files_reused = sum(plan.preflight.files_reused for plan in plans) if dry_run else 0
@@ -957,128 +987,214 @@ class RecoveryRunner:
                     watermark_touched=False,
                     coverage_touched=False,
                 )
-        for plan, record in zip(plans, manifest.records, strict=True):
-            preflight = plan.preflight
-            if preflight.outcome in {"SKIP", "PRECONDITION_FAILED"}:
-                skipped += 1
-                emit(
-                    self._record_result(
-                        record,
-                        plan,
-                        "PRECONDITION_FAILED" if preflight.outcome == "PRECONDITION_FAILED" else "SKIPPED",
-                        reasons=preflight.reasons,
-                    )
-                )
-                continue
-            if preflight.outcome == "HELD":
-                held += 1
-                emit(
-                    self._record_result(
-                        record,
-                        plan,
-                        "HELD",
-                        reasons=preflight.reasons,
-                    )
-                )
-                continue
-            if preflight.outcome == "ALREADY_READY":
-                ready += 1
-                emit(
-                    self._record_result(
-                        record,
-                        plan,
-                        "ALREADY_READY",
-                        reasons=preflight.reasons,
-                    )
-                )
-                continue
 
-            attempted += 1
-            if dry_run:
-                emit(
-                    self._record_result(record, plan, "PLANNED")
-                )
-                continue
+        active_record: RecoveryManifestRecord | None = None
+        active_plan: _Plan | None = None
+        active_metrics: _ExecutionMetrics | None = None
+        interrupted: BaseException | None = None
 
-            metrics = _ExecutionMetrics(
-                source_requests=(plan.source_plan.metadata_requests if plan.source_plan else 0)
+        def build_report(
+            *,
+            finalization_status: Literal["NOT_REQUIRED", "SUCCEEDED", "FAILED"] = "NOT_REQUIRED",
+            mutations_this_invocation: int | None = None,
+        ) -> RecoveryRunReport:
+            writes_before_finalization = (1 if run_id is not None else 0) + db_commits
+            invocation_mutations = (
+                writes_before_finalization
+                if mutations_this_invocation is None
+                else mutations_this_invocation
+            )
+            return RecoveryRunReport(
+                manifest_id=manifest.manifest_id,
+                manifest_digest=manifest.digest,
+                dry_run=dry_run,
+                ok=not errors and not any(item.outcome in {"SKIPPED", "HELD", "FAILED"} for item in records),
+                run_id=run_id,
+                planned_records=len(manifest.records),
+                attempted=attempted,
+                skipped=skipped,
+                held=held,
+                ready=ready,
+                source_requests=source_requests,
+                attachments_considered=attachments,
+                files_reused=files_reused,
+                files_downloaded=files_downloaded,
+                extraction_count=extraction_count,
+                ai_document_requests=ai_documents,
+                announcement_analyses=announcement_analyses,
+                db_commits=db_commits,
+                errors=tuple(errors),
+                records=tuple(records),
+                mutations=0 if dry_run else invocation_mutations,
+                retry_run_created=run_id is not None,
+                finalization_status=finalization_status,
+                mutations_this_invocation=0 if dry_run else invocation_mutations,
+            )
+
+        def absorb_metrics(
+            result: RecoveryRecordResult,
+            metrics: _ExecutionMetrics,
+            *,
+            metadata_requests: int = 0,
+        ) -> None:
+            nonlocal source_requests, attachments, files_reused, files_downloaded
+            nonlocal extraction_count, ai_documents, announcement_analyses, db_commits
+            source_requests += max(result.source_requests - metadata_requests, 0)
+            attachments += result.attachments_selected
+            files_reused += result.files_reused
+            files_downloaded += result.files_downloaded
+            extraction_count += result.extraction_count
+            ai_documents += result.ai_document_calls
+            announcement_analyses += metrics.announcement_analyses
+            db_commits += metrics.db_commits
+
+        try:
+            for plan, record in zip(plans, manifest.records, strict=True):
+                preflight = plan.preflight
+                if preflight.outcome in {"SKIP", "PRECONDITION_FAILED"}:
+                    skipped += 1
+                    emit(
+                        self._record_result(
+                            record,
+                            plan,
+                            "PRECONDITION_FAILED" if preflight.outcome == "PRECONDITION_FAILED" else "SKIPPED",
+                            reasons=preflight.reasons,
+                        )
+                    )
+                    continue
+                if preflight.outcome == "HELD":
+                    held += 1
+                    emit(self._record_result(record, plan, "HELD", reasons=preflight.reasons))
+                    continue
+                if preflight.outcome == "ALREADY_READY":
+                    ready += 1
+                    emit(self._record_result(record, plan, "ALREADY_READY", reasons=preflight.reasons))
+                    continue
+
+                attempted += 1
+                if dry_run:
+                    emit(self._record_result(record, plan, "PLANNED"))
+                    continue
+
+                active_record, active_plan = record, plan
+                active_metrics = _ExecutionMetrics(
+                    source_requests=(plan.source_plan.metadata_requests if plan.source_plan else 0)
+                )
+                try:
+                    self._execute_record(record, plan, active_metrics)
+                    ready += 1
+                    result = self._record_result(record, plan, "READY", metrics=active_metrics)
+                    absorb_metrics(
+                        result,
+                        active_metrics,
+                        metadata_requests=(plan.source_plan.metadata_requests if plan.source_plan else 0),
+                    )
+                    emit(result)
+                    active_metrics = None
+                    active_record, active_plan = None, None
+                except Exception as exc:  # fail the record, preserve resumability
+                    metrics = active_metrics
+                    if metrics is None:
+                        raise
+                    errors.append(f"{record.expected_external_id}: {type(exc).__name__}: {exc}")
+                    # Ordinary stage failures return the row to its established
+                    # PARTIAL retry state.  Process-level interruptions below
+                    # deliberately leave EXTRACTING/ANALYZING untouched so a
+                    # fresh preflight can resume from durable artifacts.
+                    try:
+                        current = self.store.fetch_disclosure(record.disclosure_id)
+                        if current is not None and current.processing_status in {"EXTRACTING", "ANALYZING"}:
+                            self.store.update_processing_status(record.disclosure_id, "PARTIAL")
+                            metrics.db_commits += 1
+                            metrics.after_status = "PARTIAL"
+                    except Exception as status_exc:
+                        errors.append(
+                            f"{record.expected_external_id}: could not preserve PARTIAL state: "
+                            f"{type(status_exc).__name__}: {status_exc}"
+                        )
+                    result = self._record_result(record, plan, "FAILED", reasons=(str(exc),), metrics=metrics)
+                    absorb_metrics(
+                        result,
+                        metrics,
+                        metadata_requests=(plan.source_plan.metadata_requests if plan.source_plan else 0),
+                    )
+                    emit(result)
+                    active_metrics = None
+                    active_record, active_plan = None, None
+                    break
+
+        except BaseException as exc:
+            # Process-level interruption (for example Ctrl+C or worker
+            # termination) used to bypass run finalization entirely.  Preserve
+            # the original exception while carrying a safe report for the CLI
+            # and callers that need to reconcile the durable run.
+            interrupted = exc
+            if active_record is not None and active_plan is not None and active_metrics is not None:
+                metrics = active_metrics
+                already_emitted = bool(records and records[-1].disclosure_id == active_record.disclosure_id)
+                if not already_emitted:
+                    errors.append(
+                        f"{active_record.expected_external_id}: interrupted before completion: "
+                        f"{type(exc).__name__}: {exc}"
+                    )
+                    result = self._record_result(
+                        active_record,
+                        active_plan,
+                        "FAILED",
+                        reasons=(f"{type(exc).__name__}: {exc}",),
+                        metrics=metrics,
+                    )
+                    absorb_metrics(
+                        result,
+                        metrics,
+                        metadata_requests=(active_plan.source_plan.metadata_requests if active_plan.source_plan else 0),
+                    )
+                    records.append(result)
+            else:
+                errors.append(f"recovery interrupted: {type(exc).__name__}: {exc}")
+
+        report = build_report()
+        if not dry_run and run_id is not None:
+            # Include the run-finalization write in the report sent to the API;
+            # if that request itself fails, the local report is corrected below
+            # while the original execution error remains untouched.
+            pending = build_report(
+                finalization_status="SUCCEEDED",
+                mutations_this_invocation=1 + db_commits + 1,
             )
             try:
-                self._execute_record(record, plan, metrics)
-                ready += 1
-                mutations += 1
-                db_commits += metrics.db_commits
-                result = self._record_result(record, plan, "READY", metrics=metrics)
-                source_requests += result.source_requests
-                attachments += result.attachments_selected
-                files_reused += result.files_reused
-                files_downloaded += result.files_downloaded
-                extraction_count += result.extraction_count
-                ai_documents += result.ai_document_calls
-                announcement_analyses += metrics.announcement_analyses
-                emit(result)
-            except Exception as exc:  # fail the record, preserve resumability
-                db_commits += metrics.db_commits
-                errors.append(f"{record.expected_external_id}: {type(exc).__name__}: {exc}")
-                # Leave the row in the existing resumable PARTIAL state when a
-                # stage fails.  A future invocation must create a fresh
-                # manifest snapshot; it must never reset an EXTRACTING row by
-                # force or lose the already committed file metadata.
-                try:
-                    current = self.store.fetch_disclosure(record.disclosure_id)
-                    if current is not None and current.processing_status in {"EXTRACTING", "ANALYZING"}:
-                        self.store.update_processing_status(record.disclosure_id, "PARTIAL")
-                        metrics.db_commits += 1
-                        metrics.after_status = "PARTIAL"
-                except Exception as status_exc:
-                    errors.append(
-                        f"{record.expected_external_id}: could not preserve PARTIAL state: "
-                        f"{type(status_exc).__name__}: {status_exc}"
-                    )
-                result = self._record_result(record, plan, "FAILED", reasons=(str(exc),), metrics=metrics)
-                source_requests += result.source_requests
-                attachments += result.attachments_selected
-                files_reused += result.files_reused
-                files_downloaded += result.files_downloaded
-                extraction_count += result.extraction_count
-                ai_documents += result.ai_document_calls
-                announcement_analyses += metrics.announcement_analyses
-                emit(result)
-                break
-
-        report = RecoveryRunReport(
-            manifest_id=manifest.manifest_id,
-            manifest_digest=manifest.digest,
-            dry_run=dry_run,
-            ok=not errors and not any(item.outcome in {"SKIPPED", "HELD", "FAILED"} for item in records),
-            run_id=run_id,
-            planned_records=len(manifest.records),
-            attempted=attempted,
-            skipped=skipped,
-            held=held,
-            ready=ready,
-            source_requests=source_requests,
-            attachments_considered=attachments,
-            files_reused=files_reused,
-            files_downloaded=files_downloaded,
-            extraction_count=extraction_count,
-            ai_document_requests=ai_documents,
-            announcement_analyses=announcement_analyses,
-            db_commits=db_commits,
-            errors=tuple(errors),
-            records=tuple(records),
-            mutations=0 if dry_run else mutations,
-        )
-        if not dry_run and run_id is not None:
-            try:
-                self.store.finish_retry_run(run_id, report)
+                self.store.finish_retry_run(run_id, pending)
             except Exception as exc:
-                report = report.model_copy(
+                report = pending.model_copy(
                     update={
                         "ok": False,
-                        "errors": (*report.errors, f"could not finish RETRY run: {type(exc).__name__}: {exc}"),
+                        "finalization_status": "FAILED",
+                        "mutations": 1 + db_commits,
+                        "mutations_this_invocation": 1 + db_commits,
+                        "errors": (*pending.errors, f"could not finish RETRY run: {type(exc).__name__}: {exc}"),
                     }
                 )
+            except BaseException as exc:
+                report = pending.model_copy(
+                    update={
+                        "ok": False,
+                        "finalization_status": "FAILED",
+                        "mutations": 1 + db_commits,
+                        "mutations_this_invocation": 1 + db_commits,
+                        "errors": (*pending.errors, f"could not finish RETRY run: {type(exc).__name__}: {exc}"),
+                    }
+                )
+                if interrupted is None:
+                    interrupted = exc
+            else:
+                report = pending
+
+        if interrupted is not None:
+            try:
+                setattr(interrupted, "recovery_report", report)
+            except Exception:
+                pass
+            raise interrupted.with_traceback(interrupted.__traceback__)
         return report
 
     def _execute_record(

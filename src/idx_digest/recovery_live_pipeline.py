@@ -14,6 +14,7 @@ import mimetypes
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Sequence
+from urllib.parse import urlparse
 
 from .ai_provider import resolve_ai_provider
 from .config import Settings
@@ -124,6 +125,40 @@ class LiveRecoveryPipeline:
             suffix = ".bin"
         key = hashlib.sha256(source_url.encode("utf-8")).hexdigest()
         return self.settings.data_dir / "raw" / disclosure.ticker / disclosure.external_id / f"{key}{suffix}"
+
+    def resolve_local_file(self, current: CurrentDisclosure, file: Any) -> Any:
+        """Attach the canonical local cache references to API file metadata.
+
+        The Synapse preflight response intentionally contains durable metadata,
+        not workstation paths.  Resolving the path locally keeps a resume
+        state-aware and prevents a valid extracted file from being downloaded a
+        second time.  No network or database operation occurs here.
+        """
+
+        if file.local_path is not None:
+            return file
+        source_url = str(file.source_url)
+        suffix = Path(urlparse(source_url).path).suffix.lower()
+        if not suffix or len(suffix) > 12:
+            suffix = ".bin"
+        key = hashlib.sha256(source_url.encode("utf-8")).hexdigest()
+        raw_path = self.settings.data_dir / "raw" / current.ticker / current.external_id / f"{key}{suffix}"
+        text_path = (
+            self.settings.data_dir / "text" / current.ticker / f"{file.sha256}.txt"
+            if file.sha256
+            else None
+        )
+        updates: dict[str, object] = {}
+        if raw_path.exists() and raw_path.is_file():
+            updates["local_path"] = raw_path
+        if (
+            file.extraction_status == "EXTRACTED"
+            and text_path is not None
+            and text_path.exists()
+            and text_path.is_file()
+        ):
+            updates["extracted_text_ref"] = str(text_path)
+        return file.model_copy(update=updates) if updates else file
 
     def prepare_source(
         self,
@@ -255,6 +290,7 @@ class LiveRecoveryPipeline:
             analyze_document=self.analyze_document,
             analyze_announcement=self.analyze_announcement,
             prepare_source=self.prepare_source,
+            resolve_local_file=self.resolve_local_file,
             source_request_counter=lambda: self.client.request_count,
         )
 

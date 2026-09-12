@@ -6,11 +6,12 @@ from pathlib import Path
 from uuid import uuid4
 
 import httpx
+import pytest
 
 from idx_digest.config import Settings
 from idx_digest.extractors import ExtractionResult
 from idx_digest.recovery_live_pipeline import LiveRecoveryPipeline
-from idx_digest.recovery_runner import CurrentDisclosure, RecoveryManifestRecord
+from idx_digest.recovery_runner import CurrentDisclosure, CurrentFile, RecoveryManifestRecord
 from idx_digest.recovery_runner import RecoveryCaps, RecoveryManifest, RecoveryRunner
 
 
@@ -210,3 +211,52 @@ def test_runner_enforces_actual_source_request_estimate_before_retry_run(tmp_pat
     assert "source-request cap exceeded" in report.errors[0]
     assert store.run_created is False
     assert requests == ["/primary/ListedCompany/GetAnnouncement"]
+
+
+def test_live_pipeline_resolves_existing_api_file_to_local_cache_without_source_request(tmp_path: Path) -> None:
+    record = _record()
+    record = record.model_copy(update={"expected_attachment_hashes": (PDF_HASH,)})
+    current = _current(record)
+    with LiveRecoveryPipeline(
+        _settings(tmp_path),
+        max_source_requests=12,
+        summarizer_factory=lambda settings: FakeSummarizer(),
+        transport=httpx.MockTransport(lambda request: pytest.fail("source must not be called")),
+        request_delay_seconds=0,
+        request_jitter_seconds=0,
+    ) as pipeline:
+        cache_path = pipeline._cache_path(current, type("Attachment", (), {
+            "source_url": "https://www.idx.co.id/StaticData/NewsAndAnnouncement/akta.pdf",
+            "filename": "akta.pdf",
+        })())
+        cache_path.parent.mkdir(parents=True, exist_ok=True)
+        cache_path.write_bytes(PDF_BODY)
+        file = CurrentFile(
+            disclosure_id=record.disclosure_id,
+            source_url="https://www.idx.co.id/StaticData/NewsAndAnnouncement/akta.pdf",
+            sha256=PDF_HASH,
+            download_status="DOWNLOADED",
+            extraction_status="EXTRACTED",
+            extracted_text_ref=None,
+            local_path=None,
+        )
+        resolved = pipeline.resolve_local_file(current, file)
+        assert resolved.local_path == cache_path
+
+        class Store:
+            def fetch_disclosure(self, disclosure_id):
+                return current
+
+            def list_files(self, disclosure_id):
+                return (file,)
+
+        report = RecoveryRunner(
+            Store(),
+            hooks=pipeline.hooks(),
+            caps=RecoveryCaps(max_records=1, max_source_requests=12, max_attachments=20, max_ai_documents=20),
+        ).run(RecoveryManifest(records=(record,)), dry_run=True)
+
+    assert report.ok is True
+    assert report.source_requests == 0
+    assert report.files_reused == 1
+    assert report.records[0].action == "AI_ONLY_RETRY"

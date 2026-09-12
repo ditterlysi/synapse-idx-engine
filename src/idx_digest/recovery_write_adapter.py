@@ -66,6 +66,16 @@ def _approved_records(manifest: RecoveryManifest) -> list[dict[str, str]]:
     ]
 
 
+def _terminal_status(report: RecoveryRunReport) -> str:
+    if report.ok:
+        return "COMPLETE"
+    # A recovery run that has durably changed a disclosure/file but did not
+    # finish its analysis is resumable work, not an all-or-nothing failure.
+    if report.db_commits > 0 or report.files_downloaded > 0 or report.files_reused > 0:
+        return "PARTIAL"
+    return "FAILED"
+
+
 def _recovery_metadata(manifest: RecoveryManifest, report: RecoveryRunReport | None = None) -> dict[str, object]:
     recovery: dict[str, object] = {
         "kind": "idx-pending-recovery",
@@ -87,6 +97,10 @@ def _recovery_metadata(manifest: RecoveryManifest, report: RecoveryRunReport | N
             "recordsSucceeded": report.ready,
             "recordsSkipped": report.skipped,
             "recordsFailed": failed,
+            "metricsScope": report.metrics_scope,
+            "retryRunCreated": report.retry_run_created,
+            "finalizationStatus": report.finalization_status,
+            "mutationsThisInvocation": report.mutations_this_invocation,
             "sourceRequests": report.source_requests,
             "attachmentsSelected": report.attachments_considered,
             "filesReused": report.files_reused,
@@ -97,7 +111,7 @@ def _recovery_metadata(manifest: RecoveryManifest, report: RecoveryRunReport | N
             "dbCommits": report.db_commits,
             "recordResults": [item.model_dump(mode="json", by_alias=True) for item in report.records],
             "errors": list(report.errors),
-            "finalStatus": "COMPLETE" if report.ok else ("PARTIAL" if report.ready else "FAILED"),
+            "finalStatus": _terminal_status(report),
         }
     return {"recovery": recovery}
 
@@ -180,7 +194,7 @@ class SynapseRecoveryWriteStore(RecoveryStore):
     def finish_retry_run(self, run_id: str, report: RecoveryRunReport) -> None:
         if self._run_id != run_id:
             raise RecoveryExecutionError("unknown RETRY run id")
-        final_status = "COMPLETE" if report.ok else ("PARTIAL" if report.ready else "FAILED")
+        final_status = _terminal_status(report)
         self._client.update_run(
             run_id,
             UpdateRunRequest(
@@ -191,7 +205,7 @@ class SynapseRecoveryWriteStore(RecoveryStore):
                 files_extracted=report.extraction_count,
                 analyses_completed=report.announcement_analyses,
                 source_requests=report.source_requests,
-                error_code=None if report.ok else "RECOVERY_RUN_FAILED",
+                error_code=None if report.ok else f"RECOVERY_RUN_{final_status}",
                 error_message=None if report.ok else (report.errors[0] if report.errors else "bounded recovery failed"),
                 metadata=_recovery_metadata(self._manifest_for_metadata(report), report),
             ),

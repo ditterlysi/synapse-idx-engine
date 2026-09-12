@@ -216,6 +216,14 @@ def recover_pending(
             ).run(loaded_manifest, dry_run=True)
     except (OSError, ValueError) as exc:
         raise typer.BadParameter(str(exc)) from exc
+    except BaseException as exc:
+        # RecoveryRunner re-raises process-level interruptions so the original
+        # signal/exception remains visible.  Emit its attached safe report
+        # first, preserving the run id and partial metrics for reconciliation.
+        diagnostic_report = getattr(exc, "recovery_report", None)
+        if diagnostic_report is not None:
+            typer.echo(diagnostic_report.model_dump_json(by_alias=True, indent=2))
+        raise
 
     typer.echo(report.model_dump_json(by_alias=True, indent=2))
     if not report.ok:

@@ -421,6 +421,110 @@ def test_retry_after_partial_interruption_is_resumable(tmp_path: Path) -> None:
     assert second.ready == 1
 
 
+def test_process_interruption_after_run_creation_finalizes_and_preserves_report() -> None:
+    record = _record(uuid4(), count=0, hashes=())
+    fake = FakeStore(_current(record))
+
+    class InterruptingRunner(RecoveryRunner):
+        def _execute_record(self, record, plan, metrics):
+            raise KeyboardInterrupt("simulated stop")
+
+    with pytest.raises(KeyboardInterrupt, match="simulated stop") as raised:
+        InterruptingRunner(fake, hooks=_hooks()).run(_manifest(record), dry_run=False)
+
+    report = raised.value.recovery_report
+    assert report.run_id == "retry-run-1"
+    assert report.retry_run_created is True
+    assert report.finalization_status == "SUCCEEDED"
+    assert report.metrics_scope == "CURRENT_INVOCATION"
+    assert report.mutations_this_invocation == 2  # run create + finalize
+    assert fake.calls == [("create_retry_run", report.manifest_id), ("finish_retry_run", "retry-run-1")]
+
+
+def test_process_interruption_after_status_and_file_persist_keeps_partial_metrics(tmp_path: Path) -> None:
+    record = _record(uuid4(), status="DISCOVERED", count=2, hashes=(HASH, HASH_2))
+    fake = FakeStore(_current(record))
+    first_path = tmp_path / "first.pdf"
+    first_path.write_bytes(b"first")
+    first_hash = __import__("hashlib").sha256(b"first").hexdigest()
+    record = record.model_copy(update={"expected_attachment_hashes": (first_hash, HASH_2)})
+    fake.current = _current(record)
+    calls = 0
+
+    def download(current, index, expected_hash):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            return DownloadedArtifact("https://idx.example/first.pdf", first_path, first_hash)
+        raise KeyboardInterrupt("interrupted after first file")
+
+    hooks = _hooks()
+    hooks.download_attachment = download
+    with pytest.raises(KeyboardInterrupt, match="interrupted after first file") as raised:
+        RecoveryRunner(fake, hooks=hooks).run(_manifest(record), dry_run=False)
+
+    report = raised.value.recovery_report
+    assert report.run_id == "retry-run-1"
+    assert report.attempted == 1
+    assert report.files_downloaded == 1
+    assert report.extraction_count == 1
+    assert report.ai_document_requests == 0
+    assert report.db_commits == 2  # status + one persisted file
+    assert report.mutations_this_invocation == 4  # run create + two record writes + finalize
+    assert report.finalization_status == "SUCCEEDED"
+    assert fake.current.processing_status == "EXTRACTING"
+    assert len(fake.files) == 1
+
+
+def test_live_precondition_failure_reports_invocation_scoped_zero_mutations() -> None:
+    record = _record(uuid4(), allowed=True)
+    current = _current(record, status="FAILED")
+    report = RecoveryRunner(FakeStore(current)).run(_manifest(record), dry_run=False)
+
+    assert report.run_id is None
+    assert report.retry_run_created is False
+    assert report.mutations_this_invocation == 0
+    assert report.metrics_scope == "CURRENT_INVOCATION"
+
+
+def test_resume_reuses_one_extracted_file_and_downloads_only_missing_attachment(tmp_path: Path) -> None:
+    first_path = tmp_path / "existing.pdf"
+    first_path.write_bytes(b"existing")
+    first_hash = __import__("hashlib").sha256(b"existing").hexdigest()
+    record = _record(uuid4(), count=2, hashes=(first_hash, HASH_2), allowed=True)
+    existing = CurrentFile(
+        disclosure_id=record.disclosure_id,
+        source_url="https://idx.example/existing.pdf",
+        sha256=first_hash,
+        download_status="DOWNLOADED",
+        extraction_status="EXTRACTED",
+        extracted_text_ref="text://existing",
+        local_path=first_path,
+    )
+    downloaded = tmp_path / "missing.pdf"
+    downloaded.write_bytes(b"missing")
+    missing_hash = __import__("hashlib").sha256(b"missing").hexdigest()
+    record = record.model_copy(update={"expected_attachment_hashes": (first_hash, missing_hash)})
+    current = _current(record)
+    fake = FakeStore(current, (existing,))
+    calls: list[int] = []
+    hooks = _hooks()
+
+    def download(current, index, expected_hash):
+        calls.append(index)
+        return DownloadedArtifact("https://idx.example/missing.pdf", downloaded, missing_hash)
+
+    hooks.download_attachment = download
+    report = RecoveryRunner(fake, hooks=hooks).run(_manifest(record), dry_run=False)
+
+    assert report.ready == 1
+    assert report.records[0].files_reused == 1
+    assert report.records[0].files_downloaded == 1
+    assert calls == [0]
+    assert len(fake.files) == 2
+    assert len({file.source_url for file in fake.files}) == 2
+
+
 def test_source_request_cap_stops_before_execution() -> None:
     record = _record(uuid4(), status="DISCOVERED")
     current = _current(record)
