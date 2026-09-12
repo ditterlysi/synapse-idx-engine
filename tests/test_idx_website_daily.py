@@ -23,6 +23,12 @@ from idx_digest.sources.idx_website import IdxWebsiteCheckpoint
 runner = CliRunner()
 
 
+def _cli_output(result: object) -> str:
+    output = str(getattr(result, "output", ""))
+    stderr = str(getattr(result, "stderr", ""))
+    return output if not stderr or stderr in output else output + stderr
+
+
 def _now() -> datetime:
     return datetime(2026, 8, 22, 3, 0, tzinfo=ZoneInfo("Asia/Jakarta"))
 
@@ -83,14 +89,14 @@ def test_daily_runtime_uses_production_budgets_but_manual_keeps_e2e_caps() -> No
 def test_daily_command_requires_explicit_schedule_confirmation() -> None:
     result = runner.invoke(app, ["daily"])
     assert result.exit_code != 0
-    assert "--confirm-schedule is required" in unstyle(result.output)
+    assert "--confirm-schedule is required" in unstyle(_cli_output(result))
 
 
 def test_daily_command_refuses_when_kill_switch_is_off(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("SYNAPSE_DAILY_ENABLED", "false")
     result = runner.invoke(app, ["daily", "--confirm-schedule"])
     assert result.exit_code != 0
-    assert "SYNAPSE_DAILY_ENABLED=true is required" in unstyle(result.output)
+    assert "SYNAPSE_DAILY_ENABLED=true is required" in unstyle(_cli_output(result))
 
 
 def test_recovery_command_keeps_read_only_default_and_rejects_snapshot_in_live_mode(tmp_path: Path) -> None:
@@ -154,4 +160,4 @@ def test_recovery_command_keeps_read_only_default_and_rejects_snapshot_in_live_m
         ],
     )
     assert live_without_audit_phase.exit_code != 0
-    assert "--execute-live requires an explicit --audit-phase" in live_without_audit_phase.output
+    assert "--execute-live requires an explicit --audit-phase" in _cli_output(live_without_audit_phase)
