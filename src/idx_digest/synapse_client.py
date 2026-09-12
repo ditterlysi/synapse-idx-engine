@@ -26,6 +26,29 @@ from .synapse_contract import (
 )
 
 
+def create_synapse_internal_http_client(
+    settings: Settings,
+    *,
+    transport: httpx.BaseTransport | None = None,
+) -> httpx.Client:
+    base_url = settings.synapse_internal_base_url.strip().rstrip("/")
+    secret = settings.synapse_ingestion_secret.get_secret_value().strip()
+    SynapseClient._validate_base_url(base_url)
+    if not secret:
+        raise SynapseClientConfigurationError("SYNAPSE_INGESTION_SECRET is required")
+
+    return httpx.Client(
+        base_url=base_url,
+        headers={
+            "Authorization": f"Bearer {secret}",
+            "Accept": "application/json",
+            "User-Agent": "SynapseIDXEngine/0.16.0",
+        },
+        timeout=httpx.Timeout(30.0),
+        transport=transport,
+    )
+
+
 class SynapseClientConfigurationError(ValueError):
     pass
 
@@ -44,16 +67,7 @@ class SynapseClient:
         if not secret:
             raise SynapseClientConfigurationError("SYNAPSE_INGESTION_SECRET is required")
 
-        self._client = httpx.Client(
-            base_url=base_url,
-            headers={
-                "Authorization": f"Bearer {secret}",
-                "Accept": "application/json",
-                "User-Agent": "SynapseIDXEngine/0.16.0",
-            },
-            timeout=httpx.Timeout(30.0),
-            transport=transport,
-        )
+        self._client = create_synapse_internal_http_client(settings, transport=transport)
 
     @staticmethod
     def _validate_base_url(base_url: str) -> None:
@@ -107,7 +121,11 @@ class SynapseClient:
     def create_run(self, request: CreateRunRequest) -> CreateRunResponse:
         # Do not retry create_run after a read timeout: the server may already
         # have created the run and a second POST could create a duplicate row.
-        data = self._request_json("POST", "/api/internal/idx/runs", self._payload(request))
+        payload = self._payload(request)
+        # The default factory intentionally stays out of `fields_set`; force the
+        # key into every wire request so the database uniqueness guard applies.
+        payload["idempotencyKey"] = request.idempotency_key
+        data = self._request_json("POST", "/api/internal/idx/runs", payload)
         return CreateRunResponse.model_validate(data)
 
     def update_run(self, run_id: str, request: UpdateRunRequest) -> UpdateRunResponse:
@@ -142,22 +160,36 @@ class SynapseClient:
         self,
         disclosure_id: str,
         request: DisclosureFilesUpsertRequest,
+        *,
+        run_id: str | None = None,
     ) -> DisclosureFilesUpsertResponse:
+        payload = self._payload(request)
+        if run_id is not None:
+            payload["runId"] = run_id
         data = self._request_json(
             "POST",
             f"/api/internal/idx/disclosures/{disclosure_id}/files/upsert",
-            self._payload(request),
+            payload,
             retry_transport=True,
         )
         return DisclosureFilesUpsertResponse.model_validate(data)
 
-    def commit_analysis(self, disclosure_id: str, request: CommitAnalysisRequest) -> CommitAnalysisResponse:
+    def commit_analysis(
+        self,
+        disclosure_id: str,
+        request: CommitAnalysisRequest,
+        *,
+        run_id: str | None = None,
+    ) -> CommitAnalysisResponse:
         # Analysis commits are not retried here because a read timeout can occur
         # after the server has already persisted a new analysis row.
+        payload = self._payload(request)
+        if run_id is not None:
+            payload["runId"] = run_id
         data = self._request_json(
             "POST",
             f"/api/internal/idx/disclosures/{disclosure_id}/analysis",
-            self._payload(request),
+            payload,
         )
         return CommitAnalysisResponse.model_validate(data)
 
@@ -165,11 +197,16 @@ class SynapseClient:
         self,
         disclosure_id: str,
         request: UpdateProcessingStatusRequest,
+        *,
+        run_id: str | None = None,
     ) -> UpdateProcessingStatusResponse:
+        payload = self._payload(request)
+        if run_id is not None:
+            payload["runId"] = run_id
         data = self._request_json(
             "POST",
             f"/api/internal/idx/disclosures/{disclosure_id}/status",
-            self._payload(request),
+            payload,
             retry_transport=True,
         )
         return UpdateProcessingStatusResponse.model_validate(data)

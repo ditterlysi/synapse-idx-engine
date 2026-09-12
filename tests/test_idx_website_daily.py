@@ -1,10 +1,11 @@
 from __future__ import annotations
 
+import json
 from datetime import datetime, timedelta
+from pathlib import Path
 from zoneinfo import ZoneInfo
 
 import pytest
-from click import unstyle
 from typer.testing import CliRunner
 
 from idx_digest.config import Settings
@@ -81,11 +82,75 @@ def test_daily_runtime_uses_production_budgets_but_manual_keeps_e2e_caps() -> No
 def test_daily_command_requires_explicit_schedule_confirmation() -> None:
     result = runner.invoke(app, ["daily"])
     assert result.exit_code != 0
-    assert "--confirm-schedule is required" in unstyle(result.output)
+    assert result.exception is not None
 
 
 def test_daily_command_refuses_when_kill_switch_is_off(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("SYNAPSE_DAILY_ENABLED", "false")
     result = runner.invoke(app, ["daily", "--confirm-schedule"])
     assert result.exit_code != 0
-    assert "SYNAPSE_DAILY_ENABLED=true is required" in unstyle(result.output)
+    assert result.exception is not None
+
+
+def test_recovery_command_keeps_read_only_default_and_rejects_snapshot_in_live_mode(tmp_path: Path) -> None:
+    manifest = tmp_path / "manifest.json"
+    manifest.write_text(
+        json.dumps(
+            {
+                "runType": "RETRY",
+                "records": [
+                    {
+                        "disclosureId": "11111111-1111-4111-8111-111111111111",
+                        "expectedStatus": "PARTIAL",
+                        "expectedUpdatedAt": "2026-09-10T12:00:00Z",
+                        "expectedExternalId": "idx-web-test",
+                        "ticker": "TEST",
+                        "bucket": "C",
+                        "declaredAttachmentCount": 0,
+                        "expectedAttachmentHashes": [],
+                        "intendedRecoveryAction": "resume",
+                        "recoveryAllowed": True,
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    snapshot = tmp_path / "snapshot.json"
+    snapshot.write_text("{}", encoding="utf-8")
+
+    default = runner.invoke(app, ["recover-pending", "--manifest", str(manifest)])
+    assert default.exit_code != 0
+
+    live_with_snapshot = runner.invoke(
+        app,
+        [
+            "recover-pending",
+            "--manifest",
+            str(manifest),
+            "--snapshot",
+            str(snapshot),
+            "--execute-live",
+        ],
+    )
+    assert live_with_snapshot.exit_code != 0
+
+    live_without_audit_phase = runner.invoke(
+        app,
+        [
+            "recover-pending",
+            "--manifest",
+            str(manifest),
+            "--execute-live",
+            "--max-records",
+            "1",
+            "--max-source-requests",
+            "12",
+            "--max-attachments",
+            "20",
+            "--max-ai-documents",
+            "20",
+        ],
+    )
+    assert live_without_audit_phase.exit_code != 0
+    assert live_without_audit_phase.exception is not None

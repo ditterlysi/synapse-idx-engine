@@ -303,6 +303,7 @@ class SourceIngestionRunner:
                     requested_from=requested_from,
                     requested_to=requested_to,
                     engine_version=_engine_version(),
+                    metadata={"sourceId": self.source.source_id},
                 )
             ).run_id
 
@@ -360,6 +361,7 @@ class SourceIngestionRunner:
                             client.update_processing_status(
                                 disclosure_id,
                                 UpdateProcessingStatusRequest(processing_status="PARTIAL"),
+                                run_id=run_id,
                             )
                         except Exception as status_exc:
                             stats.errors.append(
@@ -377,6 +379,7 @@ class SourceIngestionRunner:
                             client.update_processing_status(
                                 disclosure_id,
                                 UpdateProcessingStatusRequest(processing_status="PARTIAL"),
+                                run_id=run_id,
                             )
                         except Exception as status_exc:
                             stats.errors.append(
@@ -391,6 +394,7 @@ class SourceIngestionRunner:
                         client.update_processing_status(
                             disclosure_id,
                             UpdateProcessingStatusRequest(processing_status="EXTRACTING"),
+                            run_id=run_id,
                         )
 
                         documents: list[dict[str, Any]] = []
@@ -414,12 +418,14 @@ class SourceIngestionRunner:
                             response = client.upsert_files(
                                 disclosure_id,
                                 DisclosureFilesUpsertRequest(files=file_batch),
+                                run_id=run_id,
                             )
                             stats.files_published += len(response.files)
 
                         client.update_processing_status(
                             disclosure_id,
                             UpdateProcessingStatusRequest(processing_status="ANALYZING"),
+                            run_id=run_id,
                         )
                         announcement_summary = summarizer.summarize_announcement(
                             announcement=self._announcement(disclosure),
@@ -441,7 +447,7 @@ class SourceIngestionRunner:
                             ),
                             attachment_hashes=attachment_hashes,
                         )
-                        client.commit_analysis(disclosure_id, request)
+                        client.commit_analysis(disclosure_id, request, run_id=run_id)
                         stats.analyses_completed += 1
                     except Exception as exc:
                         if _is_ai_run_deadline_error(exc):
@@ -456,6 +462,7 @@ class SourceIngestionRunner:
                             client.update_processing_status(
                                 disclosure_id,
                                 UpdateProcessingStatusRequest(processing_status="PARTIAL"),
+                                run_id=run_id,
                             )
                         except Exception as status_exc:
                             stats.errors.append(

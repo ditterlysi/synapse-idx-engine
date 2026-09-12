@@ -12,6 +12,15 @@ from idx_digest.sources.idx_website import FileCheckpointStore, IdxWebsiteSource
 JAKARTA = ZoneInfo("Asia/Jakarta")
 
 
+def _attachment(filename: str, *, is_attachment: bool = True) -> dict[str, object]:
+    return {
+        "PDFFilename": filename,
+        "OriginalFilename": filename,
+        "FullSavePath": f"https://www.idx.co.id/StaticData/NewsAndAnnouncement/{filename}",
+        "IsAttachment": is_attachment,
+    }
+
+
 class FakePoliteClient:
     base_url = "https://www.idx.co.id"
 
@@ -371,3 +380,43 @@ def test_source_skips_valid_format_etf_ticker_without_checkpointing_it(tmp_path)
     checkpoint = json.loads(checkpoint_path.read_text(encoding="utf-8"))
     assert checkpoint["seenIds"] == ["20260822201500-TEST-BBRI_id-id"]
     assert etf_id not in checkpoint["seenIds"]
+
+
+def test_exact_recovery_resolver_reuses_selector_without_download_or_checkpoint(tmp_path: Path) -> None:
+    raw_id = "idx-web-20260827094727-003/AV/VIII/2026-CSC_id-id"
+    payload = {
+        "ResultCount": 1,
+        "Replies": [
+            {
+                "pengumuman": {
+                    "Id2": raw_id.removeprefix("idx-web-"),
+                    "TglPengumuman": "2026-08-27T09:47:27",
+                    "JudulPengumuman": "Penyampaian Laporan Keuangan Interim Yang Ditelaah Secara Terbatas",
+                    "Kode_Emiten": "ARTA",
+                    "JenisPengumuman": "STOCK",
+                    "PerihalPengumuman": "Laporan interim",
+                },
+                "attachments": [
+                    _attachment("FinancialStatement-2026.xlsx"),
+                    _attachment("Checklist LK ARTA.pdf"),
+                    _attachment("ARTA-XBRL.zip"),
+                ],
+            }
+        ],
+    }
+    client = FakePoliteClient(payload)
+    checkpoint = tmp_path / "checkpoint.json"
+    source = IdxWebsiteSource(
+        client,
+        checkpoint_store=FileCheckpointStore(checkpoint),
+        staging_dir=tmp_path / "cache",
+    )
+
+    disclosure = source.resolve_exact_disclosure(raw_id, "ARTA")
+
+    assert disclosure.external_id == raw_id
+    assert disclosure.ticker == "ARTA"
+    assert [item.filename for item in disclosure.attachments] == ["FinancialStatement-2026.xlsx"]
+    assert client.request_count == 1
+    assert client.download_calls == []
+    assert checkpoint.exists() is False

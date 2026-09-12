@@ -287,6 +287,7 @@ class SynapsePublisher:
                     response = self.client.upsert_files(
                         disclosure_id,
                         DisclosureFilesUpsertRequest(files=file_batch),
+                        run_id=run_id,
                     )
                     stats.files_published += len(response.files)
 
@@ -299,6 +300,7 @@ class SynapsePublisher:
                 self.client.update_processing_status(
                     disclosure_id,
                     UpdateProcessingStatusRequest(processing_status="ANALYZING"),
+                    run_id=run_id,
                 )
                 request = build_commit_request(
                     ticker=str(item["ticker"]),
@@ -311,7 +313,7 @@ class SynapsePublisher:
                     prompt_version=str(item.get("summary_prompt_version") or "announcement-v3"),
                     attachment_hashes=attachment_hashes,
                 )
-                self.client.commit_analysis(disclosure_id, request)
+                self.client.commit_analysis(disclosure_id, request, run_id=run_id)
                 stats.analyses_completed += 1
             except Exception as exc:
                 stats.partial_disclosures += 1
@@ -320,6 +322,7 @@ class SynapsePublisher:
                     self.client.update_processing_status(
                         disclosure_id,
                         UpdateProcessingStatusRequest(processing_status="PARTIAL"),
+                        run_id=run_id,
                     )
                 except Exception as status_exc:
                     stats.errors.append(f"{announcement_id}: could not mark PARTIAL: {status_exc}")
@@ -395,6 +398,7 @@ class SynapsePipelineRunner:
                     requested_from=requested_from,
                     requested_to=requested_to,
                     engine_version=_engine_version(),
+                    metadata={"sourceId": "IDX"},
                 )
             ).run_id
             pipeline = None

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Literal
+from uuid import UUID, uuid4
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
@@ -88,13 +90,21 @@ class RelevanceResponse(SynapseModel):
 
 class CreateRunRequest(SynapseModel):
     mode: RunMode
+    idempotency_key: str = Field(
+        default_factory=lambda: f"attempt:{uuid4()}",
+        min_length=1,
+        max_length=200,
+        pattern=r"^[A-Za-z0-9._:-]+$",
+    )
     requested_from: str | None = None
     requested_to: str | None = None
     engine_version: str | None = Field(default=None, min_length=1, max_length=80)
+    metadata: dict[str, object] | None = None
 
 
 class CreateRunResponse(SynapseModel):
     run_id: str = Field(min_length=1)
+    created: bool = True
 
 
 class UpdateRunRequest(SynapseModel):
@@ -108,6 +118,7 @@ class UpdateRunRequest(SynapseModel):
     source_requests: int | None = Field(default=None, ge=0)
     error_code: str | None = Field(default=None, min_length=1, max_length=80)
     error_message: str | None = Field(default=None, min_length=1, max_length=1000)
+    metadata: dict[str, object] | None = None
 
     @model_validator(mode="after")
     def validate_terminal_status(self) -> "UpdateRunRequest":
@@ -297,3 +308,51 @@ class CoverageCommitRequest(SynapseModel):
 class CoverageCommitResponse(SynapseModel):
     coverage_id: str
     created: bool
+
+
+class RecoveryPreflightDisclosure(SynapseModel):
+    disclosure_id: UUID
+    external_id: str = Field(min_length=1, max_length=200)
+    source_id: Literal["idx-website"]
+    ticker: str = Field(min_length=1, max_length=10)
+    title: str = Field(min_length=1, max_length=2000)
+    processing_status: ProcessingStatus
+    updated_at: datetime
+    is_stock_scope: bool
+    declared_attachment_count: int = Field(ge=0, le=100)
+    # The source may declare more attachments than it has supplied hashes for.
+    # Hashes therefore represent known metadata, not a complete attachment list.
+    attachment_hashes: list[str] = Field(default_factory=list, max_length=100)
+
+    @model_validator(mode="after")
+    def validate_known_hash_count(self) -> "RecoveryPreflightDisclosure":
+        if len(self.attachment_hashes) > self.declared_attachment_count:
+            raise ValueError("known attachment hashes exceed the declared attachment count")
+        return self
+
+
+class RecoveryPreflightFile(SynapseModel):
+    file_id: UUID
+    source_url: str = Field(min_length=1, max_length=2000)
+    sha256: str | None = Field(default=None, pattern=r"^[a-fA-F0-9]{64}$")
+    download_status: Literal["PENDING", "DOWNLOADED", "SKIPPED", "FAILED"]
+    extraction_status: Literal["PENDING", "EXTRACTED", "SKIPPED", "FAILED"]
+    extracted_text_hash: str | None = Field(default=None, pattern=r"^[a-fA-F0-9]{64}$")
+    extracted_text_ref: str | None = Field(default=None, max_length=2000)
+
+
+class RecoveryPreflightAnalysisState(SynapseModel):
+    has_analysis: bool
+    analysis_count: int = Field(ge=0)
+    active_analysis_id: UUID | None = None
+    active_analysis_present: bool
+    claims_count: int = Field(ge=0)
+    numbers_count: int = Field(ge=0)
+    dates_count: int = Field(ge=0)
+
+
+class RecoveryPreflightResponse(SynapseModel):
+    source_id: Literal["idx-website"]
+    disclosure: RecoveryPreflightDisclosure
+    files: list[RecoveryPreflightFile] = Field(default_factory=list, max_length=100)
+    analysis_state: RecoveryPreflightAnalysisState

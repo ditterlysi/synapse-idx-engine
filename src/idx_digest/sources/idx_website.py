@@ -235,9 +235,10 @@ class IdxWebsiteSource:
         end_at: datetime,
         index_from: int,
         page_size: int,
+        ticker: str | None = None,
     ) -> dict[str, Any]:
         return {
-            "kodeEmiten": "",
+            "kodeEmiten": ticker.strip().upper() if ticker else "",
             "emitenType": "*",
             "indexFrom": index_from,
             "pageSize": page_size,
@@ -254,6 +255,7 @@ class IdxWebsiteSource:
         end_at: datetime,
         index_from: int,
         page_size: int,
+        ticker: str | None = None,
     ) -> tuple[list[dict[str, Any]], int | None]:
         payload = self.client.get_json(
             IDX_ANNOUNCEMENT_ENDPOINT,
@@ -262,6 +264,7 @@ class IdxWebsiteSource:
                 end_at=end_at,
                 index_from=index_from,
                 page_size=page_size,
+                ticker=ticker,
             ),
         )
         replies = payload.get("Replies")
@@ -273,6 +276,98 @@ class IdxWebsiteSource:
         except (TypeError, ValueError):
             reported_total = None
         return normalized, reported_total
+
+    def resolve_exact_disclosure(self, external_id: str, ticker: str) -> SourceDisclosure:
+        """Resolve one known IDX disclosure without touching checkpoint state.
+
+        Recovery is deliberately exact-ID and single-request bounded.  The
+        timestamp embedded in the canonical IDX external id narrows the
+        metadata query to its announcement day; the returned page is then
+        filtered by the complete external id and ticker.  We reuse the same
+        response normalisation and attachment selector as the collector, but
+        never stage or download an attachment here.
+        """
+
+        normalized_id = external_id.strip()
+        normalized_ticker = ticker.strip().upper()
+        if not normalized_id or not normalized_ticker:
+            raise IdxWebsiteSourceError("exact recovery lookup requires external_id and ticker")
+        if not normalized_id.startswith(IDX_WEBSITE_EXTERNAL_ID_PREFIX):
+            raise IdxWebsiteSourceError("exact recovery lookup requires an idx-web external id")
+
+        raw_external_id = normalized_id[len(IDX_WEBSITE_EXTERNAL_ID_PREFIX) :]
+        stamp = raw_external_id[:14]
+        try:
+            announced_at = datetime.strptime(stamp, "%Y%m%d%H%M%S").replace(tzinfo=self.timezone)
+        except ValueError as exc:
+            raise IdxWebsiteSourceError("exact recovery external id has no valid timestamp prefix") from exc
+
+        page, reported_total = self._fetch_metadata_page(
+            start_at=announced_at,
+            end_at=announced_at,
+            index_from=0,
+            page_size=self.max_wide_page_size,
+            ticker=normalized_ticker,
+        )
+        matches = []
+        for item in page:
+            announcement = item.get("pengumuman")
+            if not isinstance(announcement, dict):
+                continue
+            if _raw_id(item) != raw_external_id:
+                continue
+            item_ticker = str(announcement.get("Kode_Emiten") or "").strip().upper()
+            if item_ticker != normalized_ticker:
+                raise IdxWebsiteSourceError("exact recovery metadata ticker does not match the manifest")
+            matches.append(item)
+        if len(matches) != 1:
+            detail = f"; metadata page reported {reported_total} rows" if reported_total is not None else ""
+            raise IdxWebsiteSourceError(
+                f"exact IDX disclosure {normalized_id!r} was not resolved uniquely{detail}"
+            )
+
+        item = matches[0]
+        announcement = item["pengumuman"]
+        if any(bool(announcement.get(flag)) for flag in NON_STOCK_PRODUCT_FLAGS):
+            raise IdxWebsiteSourceError("exact recovery disclosure is outside ordinary stock scope")
+        title, _title_source = _announcement_title(announcement, normalized_ticker)
+        attachments_raw = item.get("attachments") or []
+        if not isinstance(attachments_raw, list):
+            raise IdxWebsiteSourceError("exact recovery attachment metadata is not a list")
+        valid_rows = [
+            attachment
+            for attachment in attachments_raw
+            if isinstance(attachment, dict) and attachment.get("FullSavePath")
+        ]
+        decisions = classify_attachments(title, valid_rows, policy="smart")
+        selected = tuple(
+            SourceAttachment(
+                filename=_display_filename(decision.attachment),
+                source_url=_official_attachment_url(self.client.base_url, decision.attachment.get("FullSavePath")),
+                metadata={
+                    "idxIsAttachment": bool(decision.attachment.get("IsAttachment")),
+                    "selectionCategory": decision.category,
+                    "selectionReason": decision.reason,
+                },
+            )
+            for decision in decisions
+            if decision.selected
+        )
+        return SourceDisclosure(
+            external_id=normalized_id,
+            ticker=normalized_ticker,
+            announced_at=_announcement_time(announcement.get("TglPengumuman"), self.timezone),
+            title=title,
+            subject=str(announcement.get("PerihalPengumuman") or "").strip() or None,
+            disclosure_type=str(announcement.get("JenisPengumuman") or "").strip() or None,
+            source_url=IDX_DISCLOSURE_PAGE,
+            attachments=selected,
+            metadata={
+                "idxAttachmentCountOriginal": len(valid_rows),
+                "idxAttachmentCountSelected": len(selected),
+                "exactLookup": True,
+            },
+        )
 
     def _collect_metadata(
         self,

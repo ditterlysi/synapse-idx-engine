@@ -149,8 +149,19 @@ class SourceStateSynapseClient(SynapseClient):
                 self.checkpoint_eligible_external_ids.add(item.idx_announcement_id)
         return response
 
-    def commit_analysis(self, disclosure_id: str, request: CommitAnalysisRequest) -> CommitAnalysisResponse:
-        response = super().commit_analysis(disclosure_id, request)
+    def commit_analysis(
+        self,
+        disclosure_id: str,
+        request: CommitAnalysisRequest,
+        *,
+        run_id: str | None = None,
+    ) -> CommitAnalysisResponse:
+        if run_id is None:
+            # Preserve the small test/injection seam used by legacy callers;
+            # production runners always provide the active run id.
+            response = super().commit_analysis(disclosure_id, request)
+        else:
+            response = super().commit_analysis(disclosure_id, request, run_id=run_id)
         external_id = self._external_id_by_disclosure_id.get(disclosure_id)
         if external_id:
             self.checkpoint_eligible_external_ids.add(external_id)
