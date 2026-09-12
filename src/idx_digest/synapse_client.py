@@ -121,7 +121,11 @@ class SynapseClient:
     def create_run(self, request: CreateRunRequest) -> CreateRunResponse:
         # Do not retry create_run after a read timeout: the server may already
         # have created the run and a second POST could create a duplicate row.
-        data = self._request_json("POST", "/api/internal/idx/runs", self._payload(request))
+        payload = self._payload(request)
+        # The default factory intentionally stays out of `fields_set`; force the
+        # key into every wire request so the database uniqueness guard applies.
+        payload["idempotencyKey"] = request.idempotency_key
+        data = self._request_json("POST", "/api/internal/idx/runs", payload)
         return CreateRunResponse.model_validate(data)
 
     def update_run(self, run_id: str, request: UpdateRunRequest) -> UpdateRunResponse:
@@ -156,22 +160,36 @@ class SynapseClient:
         self,
         disclosure_id: str,
         request: DisclosureFilesUpsertRequest,
+        *,
+        run_id: str | None = None,
     ) -> DisclosureFilesUpsertResponse:
+        payload = self._payload(request)
+        if run_id is not None:
+            payload["runId"] = run_id
         data = self._request_json(
             "POST",
             f"/api/internal/idx/disclosures/{disclosure_id}/files/upsert",
-            self._payload(request),
+            payload,
             retry_transport=True,
         )
         return DisclosureFilesUpsertResponse.model_validate(data)
 
-    def commit_analysis(self, disclosure_id: str, request: CommitAnalysisRequest) -> CommitAnalysisResponse:
+    def commit_analysis(
+        self,
+        disclosure_id: str,
+        request: CommitAnalysisRequest,
+        *,
+        run_id: str | None = None,
+    ) -> CommitAnalysisResponse:
         # Analysis commits are not retried here because a read timeout can occur
         # after the server has already persisted a new analysis row.
+        payload = self._payload(request)
+        if run_id is not None:
+            payload["runId"] = run_id
         data = self._request_json(
             "POST",
             f"/api/internal/idx/disclosures/{disclosure_id}/analysis",
-            self._payload(request),
+            payload,
         )
         return CommitAnalysisResponse.model_validate(data)
 
@@ -179,11 +197,16 @@ class SynapseClient:
         self,
         disclosure_id: str,
         request: UpdateProcessingStatusRequest,
+        *,
+        run_id: str | None = None,
     ) -> UpdateProcessingStatusResponse:
+        payload = self._payload(request)
+        if run_id is not None:
+            payload["runId"] = run_id
         data = self._request_json(
             "POST",
             f"/api/internal/idx/disclosures/{disclosure_id}/status",
-            self._payload(request),
+            payload,
             retry_transport=True,
         )
         return UpdateProcessingStatusResponse.model_validate(data)

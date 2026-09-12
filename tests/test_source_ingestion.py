@@ -137,17 +137,17 @@ class FakeClient:
             ]
         )
 
-    def upsert_files(self, disclosure_id, request):
+    def upsert_files(self, disclosure_id, request, **_kwargs):
         self.calls.append(("upsert_files", request))
         return SimpleNamespace(
             files=[SimpleNamespace(file_id=FILE_ID, source_url=item.source_url) for item in request.files]
         )
 
-    def update_processing_status(self, disclosure_id, request):
+    def update_processing_status(self, disclosure_id, request, **_kwargs):
         self.calls.append(("status", request.processing_status))
         return SimpleNamespace(disclosure_id=disclosure_id, processing_status=request.processing_status)
 
-    def commit_analysis(self, disclosure_id, request):
+    def commit_analysis(self, disclosure_id, request, **_kwargs):
         self.calls.append(("analysis", request))
         self.analysis = request.analysis
         return SimpleNamespace(analysis_id="analysis-id", promoted=True)

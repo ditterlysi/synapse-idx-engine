@@ -51,13 +51,13 @@ class ReadyClient:
             ]
         )
 
-    def update_processing_status(self, _disclosure_id, request):
+    def update_processing_status(self, _disclosure_id, request, **_kwargs):
         raise AssertionError(f"READY disclosure must not be mutated to {request.processing_status}")
 
-    def upsert_files(self, _disclosure_id, _request):
+    def upsert_files(self, _disclosure_id, _request, **_kwargs):
         raise AssertionError("READY disclosure files must not be republished")
 
-    def commit_analysis(self, _disclosure_id, _request):
+    def commit_analysis(self, _disclosure_id, _request, **_kwargs):
         raise AssertionError("READY disclosure analysis must not be replaced")
 
     def update_run(self, _run_id, request):

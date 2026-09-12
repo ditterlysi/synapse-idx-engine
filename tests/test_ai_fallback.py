@@ -311,13 +311,13 @@ class _Client:
             ]
         )
 
-    def upsert_files(self, _disclosure_id, request):
+    def upsert_files(self, _disclosure_id, request, **_kwargs):
         return SimpleNamespace(files=[] if not request.files else [SimpleNamespace()] * len(request.files))
 
-    def update_processing_status(self, disclosure_id, request):
+    def update_processing_status(self, disclosure_id, request, **_kwargs):
         return SimpleNamespace(disclosure_id=disclosure_id, processing_status=request.processing_status)
 
-    def commit_analysis(self, _disclosure_id, request):
+    def commit_analysis(self, _disclosure_id, request, **_kwargs):
         self.analysis_requests.append(request)
         return SimpleNamespace(analysis_id="analysis-id", promoted=True)
 

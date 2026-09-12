@@ -199,6 +199,7 @@ class SynapseRecoveryWriteStore(RecoveryStore):
         response = self._client.create_run(
             CreateRunRequest(
                 mode="RETRY",
+                idempotency_key=f"RETRY:idx-website:{manifest.manifest_id}:{manifest.digest}",
                 engine_version="0.16.0-recovery-bounded-v1",
                 metadata=_recovery_metadata(
                     manifest,
@@ -246,6 +247,7 @@ class SynapseRecoveryWriteStore(RecoveryStore):
         response = self._client.update_processing_status(
             str(disclosure_id),
             UpdateProcessingStatusRequest(processing_status=status),
+            run_id=self._run_id,
         )
         if response.disclosure_id != str(disclosure_id) or response.processing_status != status:
             raise RecoveryExecutionError("Synapse returned an unexpected processing-status response")
@@ -283,6 +285,7 @@ class SynapseRecoveryWriteStore(RecoveryStore):
                     )
                 ]
             ),
+            run_id=self._run_id,
         )
         if not any(item.source_url == file.source_url for item in response.files):
             raise RecoveryExecutionError("Synapse did not confirm the recovery file upsert")
@@ -294,7 +297,7 @@ class SynapseRecoveryWriteStore(RecoveryStore):
             raise RecoveryExecutionError(
                 "analysis hook must return the existing CommitAnalysisRequest contract"
             )
-        response = self._client.commit_analysis(str(disclosure_id), analysis)
+        response = self._client.commit_analysis(str(disclosure_id), analysis, run_id=self._run_id)
         if not response.promoted:
             raise RecoveryExecutionError("Synapse did not promote the committed analysis")
         self._preflight.invalidate(disclosure_id)

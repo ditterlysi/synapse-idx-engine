@@ -60,6 +60,7 @@ def test_create_run_and_relevance_use_camel_case_contract() -> None:
         run = client.create_run(
             CreateRunRequest(
                 mode="DAILY",
+                idempotency_key="attempt:contract-1",
                 requested_from="2026-08-21T00:00:00Z",
                 requested_to="2026-08-21T01:00:00Z",
                 engine_version="0.16.0",
@@ -73,6 +74,7 @@ def test_create_run_and_relevance_use_camel_case_contract() -> None:
     assert relevance.items[0].priority == 1
     assert seen["/api/internal/idx/runs"] == {
         "mode": "DAILY",
+        "idempotencyKey": "attempt:contract-1",
         "requestedFrom": "2026-08-21T00:00:00Z",
         "requestedTo": "2026-08-21T01:00:00Z",
         "engineVersion": "0.16.0",
@@ -168,10 +170,12 @@ def test_full_write_client_matches_final_synapse_boundary() -> None:
                     )
                 ]
             ),
+            run_id=RUN_ID,
         )
         status = client.update_processing_status(
             DISCLOSURE_ID,
             UpdateProcessingStatusRequest(processing_status="ANALYZING"),
+            run_id=RUN_ID,
         )
         analysis = client.commit_analysis(
             DISCLOSURE_ID,
@@ -218,6 +222,7 @@ def test_full_write_client_matches_final_synapse_boundary() -> None:
                     ],
                 ),
             ),
+            run_id=RUN_ID,
         )
         coverage = client.commit_coverage(
             CoverageCommitRequest(
@@ -247,17 +252,19 @@ def test_full_write_client_matches_final_synapse_boundary() -> None:
     assert item["rawMetadata"] == {"synthetic": True}
 
     _, file_payload = seen[f"/api/internal/idx/disclosures/{DISCLOSURE_ID}/files/upsert"]
+    assert file_payload["runId"] == RUN_ID
     assert file_payload["files"][0]["selectedForAnalysis"] is True
     assert file_payload["files"][0]["extractedTextHash"] == "b" * 64
 
     _, analysis_payload = seen[f"/api/internal/idx/disclosures/{DISCLOSURE_ID}/analysis"]
+    assert analysis_payload["runId"] == RUN_ID
     assert analysis_payload["schemaVersion"] == "1.0"
     assert analysis_payload["analysis"]["primaryCategory"] == "OTHER"
     assert analysis_payload["analysis"]["tags"] == ["OTHER"]
     assert analysis_payload["analysis"]["materialFacts"][0]["sourceFileId"] == FILE_ID
 
     _, status_payload = seen[f"/api/internal/idx/disclosures/{DISCLOSURE_ID}/status"]
-    assert status_payload == {"processingStatus": "ANALYZING"}
+    assert status_payload == {"processingStatus": "ANALYZING", "runId": RUN_ID}
 
     _, coverage_payload = seen["/api/internal/idx/coverage/commit"]
     assert coverage_payload == {

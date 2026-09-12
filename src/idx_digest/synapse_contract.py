@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from typing import Literal
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
@@ -90,6 +90,12 @@ class RelevanceResponse(SynapseModel):
 
 class CreateRunRequest(SynapseModel):
     mode: RunMode
+    idempotency_key: str = Field(
+        default_factory=lambda: f"attempt:{uuid4()}",
+        min_length=1,
+        max_length=200,
+        pattern=r"^[A-Za-z0-9._:-]+$",
+    )
     requested_from: str | None = None
     requested_to: str | None = None
     engine_version: str | None = Field(default=None, min_length=1, max_length=80)
@@ -98,6 +104,7 @@ class CreateRunRequest(SynapseModel):
 
 class CreateRunResponse(SynapseModel):
     run_id: str = Field(min_length=1)
+    created: bool = True
 
 
 class UpdateRunRequest(SynapseModel):
