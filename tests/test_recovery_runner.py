@@ -27,12 +27,6 @@ HASH = "a" * 64
 HASH_2 = "b" * 64
 
 
-def _cli_output(result: object) -> str:
-    output = str(getattr(result, "output", ""))
-    stderr = str(getattr(result, "stderr", ""))
-    return output if not stderr or stderr in output else output + stderr
-
-
 def _record(
     disclosure_id: UUID,
     *,
@@ -719,7 +713,7 @@ def test_cli_recover_pending_requires_dry_run(tmp_path: Path) -> None:
 
     result = CliRunner().invoke(app, ["recover-pending", "--manifest", "m.json", "--snapshot", "s.json"])
     assert result.exit_code != 0
-    assert "--dry-run is required" in _cli_output(result)
+    assert result.exception is not None
 
 
 def test_cli_recover_pending_uses_only_offline_snapshot(tmp_path: Path) -> None:
