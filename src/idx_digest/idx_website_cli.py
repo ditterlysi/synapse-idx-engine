@@ -156,6 +156,11 @@ def recover_pending(
     max_source_requests: int | None = typer.Option(None, "--max-source-requests", min=0, max=100),
     max_attachments: int | None = typer.Option(None, "--max-attachments", min=0, max=100),
     max_ai_documents: int | None = typer.Option(None, "--max-ai-documents", min=0, max=100),
+    audit_phase: str | None = typer.Option(
+        None,
+        "--audit-phase",
+        help="Approved recovery phase recorded in live RETRY run metadata.",
+    ),
 ) -> None:
     """Plan or explicitly execute allowlisted pending IDs.
 
@@ -178,6 +183,8 @@ def recover_pending(
                 "--execute-live requires explicit --max-records, --max-source-requests, "
                 "--max-attachments, and --max-ai-documents caps"
             )
+        if execute_live and not (audit_phase or "").strip():
+            raise ValueError("--execute-live requires an explicit --audit-phase")
         caps = RecoveryCaps(
             max_records=defaults.max_records if max_records is None else max_records,
             max_source_requests=defaults.max_source_requests
@@ -200,7 +207,12 @@ def recover_pending(
                 settings,
                 max_source_requests=max_source_requests,
                 max_download_bytes=settings.synapse_daily_max_download_bytes,
-            ) as pipeline, SynapseRecoveryWriteStore(settings, loaded_manifest) as store:
+            ) as pipeline, SynapseRecoveryWriteStore(
+                settings,
+                loaded_manifest,
+                caps=caps,
+                audit_phase=audit_phase or "",
+            ) as store:
                 report = RecoveryRunner(
                     store,
                     hooks=pipeline.hooks(),

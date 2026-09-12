@@ -135,3 +135,23 @@ def test_recovery_command_keeps_read_only_default_and_rejects_snapshot_in_live_m
         ],
     )
     assert live_with_snapshot.exit_code != 0
+
+    live_without_audit_phase = runner.invoke(
+        app,
+        [
+            "recover-pending",
+            "--manifest",
+            str(manifest),
+            "--execute-live",
+            "--max-records",
+            "1",
+            "--max-source-requests",
+            "12",
+            "--max-attachments",
+            "20",
+            "--max-ai-documents",
+            "20",
+        ],
+    )
+    assert live_without_audit_phase.exit_code != 0
+    assert "--execute-live requires an explicit --audit-phase" in live_without_audit_phase.output

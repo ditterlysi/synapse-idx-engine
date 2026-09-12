@@ -19,6 +19,7 @@ from .recovery_preflight_adapter import SynapseRecoveryPreflightStore
 from .recovery_runner import (
     CurrentDisclosure,
     CurrentFile,
+    RecoveryCaps,
     RecoveryExecutionError,
     RecoveryManifest,
     RecoveryRunReport,
@@ -76,18 +77,25 @@ def _terminal_status(report: RecoveryRunReport) -> str:
     return "FAILED"
 
 
-def _recovery_metadata(manifest: RecoveryManifest, report: RecoveryRunReport | None = None) -> dict[str, object]:
+def _recovery_metadata(
+    manifest: RecoveryManifest,
+    *,
+    caps: RecoveryCaps,
+    audit_phase: str,
+    report: RecoveryRunReport | None = None,
+) -> dict[str, object]:
     recovery: dict[str, object] = {
         "kind": "idx-pending-recovery",
-        "phase": "2B-4A",
+        "phase": audit_phase,
+        "runtimeMode": "EXECUTE_LIVE",
         "manifestId": str(manifest.manifest_id),
         "manifestDigest": manifest.digest,
         "approvedRecords": _approved_records(manifest),
         "caps": {
-            "maxRecords": MAX_LIVE_RECOVERY_RECORDS,
-            "maxSourceRequests": MAX_LIVE_SOURCE_REQUESTS,
-            "maxAttachments": MAX_LIVE_ATTACHMENTS,
-            "maxAIDocuments": MAX_LIVE_AI_DOCUMENTS,
+            "maxRecords": caps.max_records,
+            "maxSourceRequests": caps.max_source_requests,
+            "maxAttachments": caps.max_attachments,
+            "maxAIDocuments": caps.max_ai_documents,
         },
     }
     if report is not None:
@@ -124,6 +132,8 @@ class SynapseRecoveryWriteStore(RecoveryStore):
         settings: Settings,
         manifest: RecoveryManifest,
         *,
+        caps: RecoveryCaps,
+        audit_phase: str,
         transport: httpx.BaseTransport | None = None,
     ) -> None:
         if manifest.run_type != "RETRY":
@@ -134,11 +144,16 @@ class SynapseRecoveryWriteStore(RecoveryStore):
             raise RecoveryExecutionError("live recovery record cap exceeded")
         if any(not record.recovery_allowed for record in manifest.records):
             raise RecoveryExecutionError("every live recovery record must be explicitly approved")
+        normalized_audit_phase = audit_phase.strip()
+        if not normalized_audit_phase:
+            raise RecoveryExecutionError("live recovery audit phase is required")
 
         self._manifest = manifest
         self._manifest_id = manifest.manifest_id
         self._manifest_digest = manifest.digest
         self._allowed_ids = frozenset(record.disclosure_id for record in manifest.records)
+        self._caps = caps
+        self._audit_phase = normalized_audit_phase
         self._preflight = SynapseRecoveryPreflightStore(settings, transport=transport)
         self._client = SynapseClient(settings, transport=transport)
         self._run_id: str | None = None
@@ -184,8 +199,12 @@ class SynapseRecoveryWriteStore(RecoveryStore):
         response = self._client.create_run(
             CreateRunRequest(
                 mode="RETRY",
-                engine_version="0.16.0-recovery-2b4a",
-                metadata=_recovery_metadata(manifest),
+                engine_version="0.16.0-recovery-bounded-v1",
+                metadata=_recovery_metadata(
+                    manifest,
+                    caps=self._caps,
+                    audit_phase=self._audit_phase,
+                ),
             )
         )
         self._run_id = response.run_id
@@ -207,7 +226,12 @@ class SynapseRecoveryWriteStore(RecoveryStore):
                 source_requests=report.source_requests,
                 error_code=None if report.ok else f"RECOVERY_RUN_{final_status}",
                 error_message=None if report.ok else (report.errors[0] if report.errors else "bounded recovery failed"),
-                metadata=_recovery_metadata(self._manifest_for_metadata(report), report),
+                metadata=_recovery_metadata(
+                    self._manifest_for_metadata(report),
+                    caps=self._caps,
+                    audit_phase=self._audit_phase,
+                    report=report,
+                ),
             ),
         )
 

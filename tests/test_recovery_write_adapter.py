@@ -10,6 +10,7 @@ import pytest
 
 from idx_digest.config import Settings
 from idx_digest.recovery_runner import (
+    RecoveryCaps,
     CurrentFile,
     RecoveryManifest,
     RecoveryManifestRecord,
@@ -29,6 +30,7 @@ NOW = datetime(2026, 9, 10, 12, 0, tzinfo=timezone.utc)
 HASH = "a" * 64
 RUN_ID = "986b5105-f894-4a69-a733-a4e1bcf2cc62"
 ANALYSIS_ID = "2cb247cf-9697-4c92-9bcc-075b6c783916"
+CAPS = RecoveryCaps(max_records=1, max_source_requests=9, max_attachments=7, max_ai_documents=6)
 
 
 def _record(disclosure_id: UUID | None = None) -> RecoveryManifestRecord:
@@ -131,7 +133,7 @@ def test_writer_uses_existing_per_id_paths_and_persists_recovery_metrics(tmp_pat
         raise AssertionError(f"unexpected request: {request.method} {request.url.path}")
 
     with SynapseRecoveryWriteStore(
-        _settings(), manifest, transport=httpx.MockTransport(handler)
+        _settings(), manifest, caps=CAPS, audit_phase="2B-5A", transport=httpx.MockTransport(handler)
     ) as store:
         run_id = store.create_retry_run(manifest)
         assert run_id == RUN_ID
@@ -173,6 +175,18 @@ def test_writer_uses_existing_per_id_paths_and_persists_recovery_metrics(tmp_pat
         store.finish_retry_run(run_id, report)
 
     paths = [path for _method, path, _payload in seen]
+    create_payload = next(payload for method, path, payload in seen if method == "POST" and path == "/api/internal/idx/runs")
+    finish_payload = next(payload for method, path, payload in seen if method == "PATCH" and path == f"/api/internal/idx/runs/{RUN_ID}")
+    for payload in (create_payload, finish_payload):
+        recovery = payload["metadata"]["recovery"]
+        assert recovery["phase"] == "2B-5A"
+        assert recovery["runtimeMode"] == "EXECUTE_LIVE"
+        assert recovery["caps"] == {
+            "maxRecords": 1,
+            "maxSourceRequests": 9,
+            "maxAttachments": 7,
+            "maxAIDocuments": 6,
+        }
     assert f"/api/internal/idx/disclosures/{record.disclosure_id}/status" in paths
     assert f"/api/internal/idx/disclosures/{record.disclosure_id}/files/upsert" in paths
     assert f"/api/internal/idx/disclosures/{record.disclosure_id}/analysis" in paths
@@ -183,16 +197,28 @@ def test_writer_uses_existing_per_id_paths_and_persists_recovery_metrics(tmp_pat
 def test_writer_rejects_ids_outside_manifest_without_http() -> None:
     record = _record()
     manifest = RecoveryManifest(records=(record,))
-    with SynapseRecoveryWriteStore(_settings(), manifest, transport=httpx.MockTransport(lambda _request: pytest.fail("HTTP must not be called"))) as store:
+    with SynapseRecoveryWriteStore(_settings(), manifest, caps=CAPS, audit_phase="2B-5A", transport=httpx.MockTransport(lambda _request: pytest.fail("HTTP must not be called"))) as store:
         with pytest.raises(RecoveryExecutionError, match="outside the immutable recovery manifest"):
             store.update_processing_status(uuid4(), "PARTIAL")
+
+
+def test_writer_requires_explicit_audit_phase() -> None:
+    manifest = RecoveryManifest(records=(_record(),))
+    with pytest.raises(RecoveryExecutionError, match="audit phase is required"):
+        SynapseRecoveryWriteStore(
+            _settings(),
+            manifest,
+            caps=CAPS,
+            audit_phase=" ",
+            transport=httpx.MockTransport(lambda _request: pytest.fail("HTTP must not be called")),
+        )
 
 
 def test_writer_rejects_manifest_digest_change() -> None:
     record = _record()
     manifest = RecoveryManifest(records=(record,))
     changed = RecoveryManifest(records=(record.model_copy(update={"ticker": "OTHER"}),))
-    with SynapseRecoveryWriteStore(_settings(), manifest, transport=httpx.MockTransport(lambda _request: pytest.fail("HTTP must not be called"))) as store:
+    with SynapseRecoveryWriteStore(_settings(), manifest, caps=CAPS, audit_phase="2B-5A", transport=httpx.MockTransport(lambda _request: pytest.fail("HTTP must not be called"))) as store:
         with pytest.raises(RecoveryExecutionError, match="manifest changed"):
             store.create_retry_run(changed)
 
@@ -200,7 +226,7 @@ def test_writer_rejects_manifest_digest_change() -> None:
 def test_writer_requires_existing_analysis_contract() -> None:
     record = _record()
     manifest = RecoveryManifest(records=(record,))
-    with SynapseRecoveryWriteStore(_settings(), manifest, transport=httpx.MockTransport(lambda _request: pytest.fail("HTTP must not be called"))) as store:
+    with SynapseRecoveryWriteStore(_settings(), manifest, caps=CAPS, audit_phase="2B-5A", transport=httpx.MockTransport(lambda _request: pytest.fail("HTTP must not be called"))) as store:
         with pytest.raises(RecoveryExecutionError, match="CommitAnalysisRequest contract"):
             store.commit_analysis(record.disclosure_id, {"analysis": "wrong"})
 
@@ -215,7 +241,7 @@ def test_writer_rejects_duplicate_retry_run_creation() -> None:
         return httpx.Response(201, json={"runId": RUN_ID})
 
     with SynapseRecoveryWriteStore(
-        _settings(), manifest, transport=httpx.MockTransport(handler)
+        _settings(), manifest, caps=CAPS, audit_phase="2B-5A", transport=httpx.MockTransport(handler)
     ) as store:
         store.create_retry_run(manifest)
         with pytest.raises(RecoveryExecutionError, match="already created"):
@@ -239,7 +265,7 @@ def test_writer_rejects_unexpected_status_response() -> None:
         raise AssertionError(f"unexpected request: {request.method} {request.url.path}")
 
     with SynapseRecoveryWriteStore(
-        _settings(), manifest, transport=httpx.MockTransport(handler)
+        _settings(), manifest, caps=CAPS, audit_phase="2B-5A", transport=httpx.MockTransport(handler)
     ) as store:
         store.create_retry_run(manifest)
         with pytest.raises(RecoveryExecutionError, match="unexpected processing-status"):
@@ -258,7 +284,7 @@ def test_writer_rejects_unpromoted_analysis() -> None:
         raise AssertionError(f"unexpected request: {request.method} {request.url.path}")
 
     with SynapseRecoveryWriteStore(
-        _settings(), manifest, transport=httpx.MockTransport(handler)
+        _settings(), manifest, caps=CAPS, audit_phase="2B-5A", transport=httpx.MockTransport(handler)
     ) as store:
         with pytest.raises(RecoveryExecutionError, match="did not promote"):
             store.commit_analysis(record.disclosure_id, _analysis())

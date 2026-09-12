@@ -11,6 +11,7 @@ from idx_digest.recovery_live_pipeline import LiveRecoveryPipeline
 from idx_digest.recovery_preflight_adapter import SynapseRecoveryPreflightStore
 from idx_digest.recovery_write_adapter import SynapseRecoveryWriteStore
 from idx_digest.recovery_runner import (
+    RecoveryCaps,
     RecoveryExecutionError,
     RecoveryManifest,
     RecoveryManifestRecord,
@@ -201,7 +202,11 @@ def test_live_orchestration_preflight_stops_before_source_or_retry_write(tmp_pat
         request_delay_seconds=0,
         request_jitter_seconds=0,
     ) as pipeline, SynapseRecoveryWriteStore(
-        _settings(tmp_path), manifest, transport=httpx.MockTransport(handler)
+        _settings(tmp_path),
+        manifest,
+        caps=RecoveryCaps(max_records=1, max_source_requests=12, max_attachments=20, max_ai_documents=20),
+        audit_phase="2B-5A",
+        transport=httpx.MockTransport(handler),
     ) as store:
         hooks = pipeline.hooks()
         # Keep the exact live hook composition but stop before IDX source
