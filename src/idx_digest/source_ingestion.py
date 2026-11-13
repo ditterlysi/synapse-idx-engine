@@ -15,6 +15,7 @@ from .extractors import ExtractionResult, extract_document
 from .source_contract import DisclosureSource, SourceAttachment, SourceContractError, SourceDisclosure
 from .summarizer import OpenRouterSummarizer
 from .synapse_client import SynapseClient
+from .rules_analysis import classify_and_build
 from .synapse_contract import (
     CommitAnalysisRequest,
     CoverageCommitRequest,
