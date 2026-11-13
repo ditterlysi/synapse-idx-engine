@@ -13,9 +13,9 @@ from .config import Settings
 from .daily_guardrails import DailyPolicy, DailyRunBudget
 from .extractors import ExtractionResult, extract_document
 from .source_contract import DisclosureSource, SourceAttachment, SourceContractError, SourceDisclosure
+from .rules_analysis import classify_and_build
 from .summarizer import OpenRouterSummarizer
 from .synapse_client import SynapseClient
-from .rules_analysis import classify_and_build
 from .synapse_contract import (
     CommitAnalysisRequest,
     CoverageCommitRequest,

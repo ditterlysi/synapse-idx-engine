@@ -17,7 +17,6 @@ from .idx_polite_http import CURRENT_IDX_BASE_URL, PoliteFetchClient
 from .recovery_live_pipeline import LiveRecoveryPipeline
 from .recovery_runner import RecoveryCaps, RecoveryRunner, SnapshotRecoveryStore, load_manifest, load_snapshot
 from .recovery_write_adapter import SynapseRecoveryWriteStore
-from .rules_analysis import classify_and_build
 from .source_ingestion import SourceIngestionRunner
 from .source_state_client import SourceStateSynapseClient, checkpoint_from_payload
 from .sources.idx_website import (
