@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from datetime import datetime, timedelta
 from pathlib import Path
+from typing import Callable
 from zoneinfo import ZoneInfo
 
 import typer
@@ -16,6 +17,7 @@ from .idx_polite_http import CURRENT_IDX_BASE_URL, PoliteFetchClient
 from .recovery_live_pipeline import LiveRecoveryPipeline
 from .recovery_runner import RecoveryCaps, RecoveryRunner, SnapshotRecoveryStore, load_manifest, load_snapshot
 from .recovery_write_adapter import SynapseRecoveryWriteStore
+from .rules_analysis import classify_and_build
 from .source_ingestion import SourceIngestionRunner
 from .source_state_client import SourceStateSynapseClient, checkpoint_from_payload
 from .sources.idx_website import (
@@ -250,6 +252,8 @@ def _run_collection(
     checkpoint: Path | None,
     run_mode: str,
     schedule_enabled: bool,
+    rules_only: bool = False,
+    relevance: Callable[[str], dict[str, bool]] | None = None,
 ) -> None:
     issues = _manual_import_issues(settings)
     if issues:
@@ -323,10 +327,12 @@ def _run_collection(
             provider_runtime.settings,
             source,
             client_factory=client_factory,
-            summarizer_factory=provider_runtime.summarizer_factory,
+            summarizer_factory=None if rules_only else provider_runtime.summarizer_factory,
             run_mode=run_mode,
             allow_coverage_commit=False,
             require_external_id_prefix=IDX_WEBSITE_EXTERNAL_ID_PREFIX,
+            rules_only=rules_only,
+            relevance=relevance,
         ).run_window(start_at=start_at, end_at=end_at)
 
         if result.processing_ok:
@@ -459,6 +465,21 @@ def daily(
         "--confirm-schedule",
         help="Required acknowledgement for the scheduled production collector.",
     ),
+    rules_only: bool = typer.Option(
+        False,
+        "--rules-only",
+        help="Classify disclosures using title rules only, without downloading attachments or calling AI.",
+    ),
+    in_portfolio: str = typer.Option(
+        "",
+        "--in-portfolio",
+        help="Comma-separated tickers in owner portfolio (gets HIGH materiality).",
+    ),
+    in_watchlist: str = typer.Option(
+        "",
+        "--in-watchlist",
+        help="Comma-separated tickers in owner watchlist (gets MEDIUM materiality).",
+    ),
 ) -> None:
     """Run one conservative scheduled collection window using durable Synapse state."""
     if not confirm_schedule:
@@ -499,6 +520,16 @@ def daily(
         )
         raise typer.Exit(code=1) from exc
 
+    # Build relevance lookup once from CLI flags.
+    portfolio_set = {t.strip().upper() for t in in_portfolio.split(",") if t.strip()}
+    watchlist_set = {t.strip().upper() for t in in_watchlist.split(",") if t.strip()}
+
+    def relevance_lookup(ticker: str) -> dict[str, bool]:
+        return {
+            "in_portfolio": ticker.strip().upper() in portfolio_set,
+            "in_watchlist": ticker.strip().upper() in watchlist_set,
+        }
+
     _run_collection(
         settings=settings,
         start_at=start_at,
@@ -506,4 +537,6 @@ def daily(
         checkpoint=None,
         run_mode="DAILY",
         schedule_enabled=True,
+        rules_only=rules_only,
+        relevance=relevance_lookup if rules_only else None,
     )
