@@ -16,6 +16,7 @@ from .source_contract import DisclosureSource, SourceAttachment, SourceContractE
 from .summarizer import OpenRouterSummarizer
 from .synapse_client import SynapseClient
 from .synapse_contract import (
+    CommitAnalysisRequest,
     CoverageCommitRequest,
     CreateRunRequest,
     DisclosureFilesUpsertRequest,
@@ -27,6 +28,7 @@ from .synapse_contract import (
     UpdateRunRequest,
 )
 from .synapse_mapper import build_commit_request
+from .rules_analysis import classify_and_build
 
 DISCLOSURE_BATCH_SIZE = 20
 FILE_BATCH_SIZE = 100
@@ -144,6 +146,8 @@ class SourceIngestionRunner:
         run_mode: RunMode = "MANUAL_BACKFILL",
         allow_coverage_commit: bool = False,
         require_external_id_prefix: str | None = None,
+        rules_only: bool = False,
+        relevance: Callable[[str], dict[str, bool]] | None = None,
     ) -> None:
         self.settings = settings
         self.source = source
@@ -153,6 +157,8 @@ class SourceIngestionRunner:
         self.run_mode = run_mode
         self.allow_coverage_commit = allow_coverage_commit
         self.require_external_id_prefix = require_external_id_prefix
+        self.rules_only = rules_only
+        self.relevance = relevance
 
     def _validate_disclosure(self, disclosure: SourceDisclosure) -> None:
         if self.require_external_id_prefix and not disclosure.external_id.startswith(
@@ -338,8 +344,79 @@ class SourceIngestionRunner:
                 if any(disclosure_statuses.get(item.external_id) != "READY" for item in local_items):
                     summarizer = self.summarizer_factory(runtime_settings)
 
-                ai_rate_limited = False
-                ai_run_deadline_exceeded = False
+                if self.rules_only:
+                    # Lightweight path: classify from the title, commit the
+                    # rules payload, never download or read the document.
+                    for disclosure in local_items:
+                        disclosure_id = disclosure_ids.get(disclosure.external_id)
+                        if not disclosure_id:
+                            stats.partial_disclosures += 1
+                            stats.errors.append(
+                                f"{disclosure.external_id}: Synapse disclosure id missing after upsert"
+                            )
+                            continue
+                        if disclosure_statuses.get(disclosure.external_id) == "READY":
+                            stats.disclosures_skipped_ready += 1
+                            continue
+                        relevance = {"in_portfolio": False, "in_watchlist": False}
+                        if self.relevance is not None:
+                            try:
+                                relevance = self.relevance(disclosure.ticker)
+                            except Exception as relevance_error:
+                                stats.errors.append(
+                                    f"{disclosure.external_id}: relevance lookup failed: "
+                                    f"{_truncate(str(relevance_error), 400)}"
+                                )
+                        try:
+                            request = classify_and_build(
+                                ticker=disclosure.ticker,
+                                title=disclosure.title,
+                                announced_at=disclosure.announced_at,
+                                announcement_id=disclosure.external_id,
+                                in_portfolio=relevance.get("in_portfolio", False),
+                                in_watchlist=relevance.get("in_watchlist", False),
+                            )
+                            client.commit_analysis(
+                                disclosure_id,
+                                CommitAnalysisRequest(
+                                    provider=request["provider"],
+                                    model=request["model"],
+                                    schema_version=request["schema_version"],
+                                    prompt_version=request["prompt_version"],
+                                    taxonomy_version=request["taxonomy_version"],
+                                    input_hash=request["input_hash"],
+                                    input_tokens=None,
+                                    output_tokens=None,
+                                    duration_ms=None,
+                                    analysis=request["summary"],
+                                ),
+                                run_id=run_id,
+                            )
+                            stats.analyses_completed += 1
+                            client.update_processing_status(
+                                disclosure_id,
+                                UpdateProcessingStatusRequest(processing_status="READY"),
+                                run_id=run_id,
+                            )
+                        except Exception as exc:
+                            stats.partial_disclosures += 1
+                            stats.errors.append(
+                                f"{disclosure.external_id}: {_truncate(str(exc) or type(exc).__name__, 700)}"
+                            )
+                            try:
+                                client.update_processing_status(
+                                    disclosure_id,
+                                    UpdateProcessingStatusRequest(processing_status="PARTIAL"),
+                                    run_id=run_id,
+                                )
+                            except Exception as status_exc:
+                                stats.errors.append(
+                                    f"{disclosure.external_id}: could not mark PARTIAL: "
+                                    f"{_truncate(str(status_exc), 400)}"
+                                )
+                else:
+                    ai_rate_limited = False
+                    ai_run_deadline_exceeded = False
                 for disclosure in local_items:
                     disclosure_id = disclosure_ids.get(disclosure.external_id)
                     if not disclosure_id:
@@ -388,8 +465,9 @@ class SourceIngestionRunner:
                             )
                         continue
                     try:
-                        if not disclosure.attachments:
-                            raise SourceContractError("source disclosure has no staged attachments")
+                        if not self.rules_only:
+                            if not disclosure.attachments:
+                                raise SourceContractError("source disclosure has no staged attachments")
 
                         client.update_processing_status(
                             disclosure_id,
