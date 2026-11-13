@@ -12,8 +12,8 @@ from urllib.parse import urlparse
 from .config import Settings
 from .daily_guardrails import DailyPolicy, DailyRunBudget
 from .extractors import ExtractionResult, extract_document
-from .source_contract import DisclosureSource, SourceAttachment, SourceContractError, SourceDisclosure
 from .rules_analysis import classify_and_build
+from .source_contract import DisclosureSource, SourceAttachment, SourceContractError, SourceDisclosure
 from .summarizer import OpenRouterSummarizer
 from .synapse_client import SynapseClient
 from .synapse_contract import (
@@ -29,7 +29,6 @@ from .synapse_contract import (
     UpdateRunRequest,
 )
 from .synapse_mapper import build_commit_request
-from .rules_analysis import classify_and_build
 
 DISCLOSURE_BATCH_SIZE = 20
 FILE_BATCH_SIZE = 100
