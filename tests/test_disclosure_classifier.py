@@ -37,6 +37,7 @@ def test_classify_disclosure_rights_issue() -> None:
 def test_classify_disclosure_buyback() -> None:
     assert classify_disclosure("Pembelian Kembali Saham") == "BUYBACK"
     assert classify_disclosure("Buy Back Saham") == "BUYBACK"
+    assert classify_disclosure("Pembelian Kembali Saham oleh Perusahaan") == "BUYBACK"
 
 
 def test_classify_disclosure_bond() -> None:
