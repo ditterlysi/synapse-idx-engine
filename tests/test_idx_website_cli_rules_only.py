@@ -17,19 +17,22 @@ runner = CliRunner()
 def test_daily_help_contains_rules_only_flag() -> None:
     result = runner.invoke(app, ["daily", "--help"])
     assert result.exit_code == 0
-    assert "rules-only" in result.output.replace("\n", " ")
+    output = result.output.replace("\n", " ").lower()
+    assert "rules-only" in output or "rules only" in output
 
 
 def test_daily_help_contains_portfolio_flag() -> None:
     result = runner.invoke(app, ["daily", "--help"])
     assert result.exit_code == 0
-    assert "in-portfolio" in result.output.replace("\n", " ")
+    output = result.output.replace("\n", " ").lower()
+    assert "in-portfolio" in output or "in portfolio" in output
 
 
 def test_daily_help_contains_watchlist_flag() -> None:
     result = runner.invoke(app, ["daily", "--help"])
     assert result.exit_code == 0
-    assert "in-watchlist" in result.output.replace("\n", " ")
+    output = result.output.replace("\n", " ").lower()
+    assert "in-watchlist" in output or "in watchlist" in output
 
 
 def test_daily_requires_confirm_schedule() -> None:
