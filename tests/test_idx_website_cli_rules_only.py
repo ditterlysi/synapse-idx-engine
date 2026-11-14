@@ -7,7 +7,6 @@ network access.
 
 from __future__ import annotations
 
-import pytest
 from typer.testing import CliRunner
 
 from idx_digest.idx_website_cli import app
