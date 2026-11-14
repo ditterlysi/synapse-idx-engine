@@ -4,6 +4,8 @@ on:
   schedule:
     # Primary: 20:07 UTC = 03:07 Asia/Jakarta (next calendar day).
     - cron: "7 20 * * *"
+    # Midday refresh: 05:00 UTC = 12:00 Asia/Jakarta. Rules-only, lighter refresh.
+    - cron: "0 5 * * *"
     # Delivery backup: 20:37 UTC = 03:37 Asia/Jakarta. A preflight guard
     # suppresses this run when another scheduled delivery was created recently.
     - cron: "37 20 * * *"
