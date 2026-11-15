@@ -30,8 +30,11 @@ from .synapse_contract import (
 )
 from .synapse_mapper import build_commit_request
 
-DISCLOSURE_BATCH_SIZE = 20
-FILE_BATCH_SIZE = 100
+# Cloudflare Workers caps subrequests at 50 per invocation. The Synapse upsert
+# endpoints issue ~4 subrequests per item (reconciliation, claim, insert, guard),
+# so keep batches under 50/4.
+DISCLOSURE_BATCH_SIZE = 10
+FILE_BATCH_SIZE = 10
 
 
 def _engine_version() -> str:
