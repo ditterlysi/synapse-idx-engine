@@ -35,7 +35,7 @@ from .synapse_runtime import (
     bind_runtime,
 )
 
-DISCLOSURE_BATCH_SIZE = 20
+DISCLOSURE_BATCH_SIZE = 10
 
 
 def _engine_version() -> str:
