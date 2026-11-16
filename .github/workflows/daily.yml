@@ -151,7 +151,7 @@ jobs:
       - name: Run daily collector
         run: |
           set -o pipefail
-          synapse-idx-website daily --confirm-schedule | tee idx-daily-report.json
+          synapse-idx-website daily --confirm-schedule --rules-only | tee idx-daily-report.json
 
       # Read-only Synapse source-state check. It does not contact IDX or AI and
       # cannot advance the checkpoint. continue-on-error keeps observability
