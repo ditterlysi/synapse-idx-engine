@@ -344,7 +344,10 @@ class SourceIngestionRunner:
                         if item.created:
                             stats.disclosures_created += 1
 
-                if any(disclosure_statuses.get(item.external_id) != "READY" for item in local_items):
+                summarizer = None
+                if not self.rules_only and any(
+                    disclosure_statuses.get(item.external_id) != "READY" for item in local_items
+                ):
                     summarizer = self.summarizer_factory(runtime_settings)
 
                 if self.rules_only:
