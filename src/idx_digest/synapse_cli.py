@@ -67,7 +67,7 @@ def _live_e2e_issues(settings: Settings) -> list[str]:
     return list(dict.fromkeys(issues))
 
 
-def _manual_import_issues(settings: Settings) -> list[str]:
+def _manual_import_issues(settings: Settings, *, require_ai: bool = True) -> list[str]:
     issues: list[str] = []
     try:
         DailyPolicy.from_settings(settings)
@@ -77,7 +77,8 @@ def _manual_import_issues(settings: Settings) -> list[str]:
         issues.append("SYNAPSE_INTERNAL_BASE_URL is required")
     if not settings.synapse_ingestion_secret.get_secret_value().strip():
         issues.append("SYNAPSE_INGESTION_SECRET is required")
-    issues.extend(ai_provider_issues(settings, context="manual disclosure analysis"))
+    if require_ai:
+        issues.extend(ai_provider_issues(settings, context="manual disclosure analysis"))
     return list(dict.fromkeys(issues))
 
 

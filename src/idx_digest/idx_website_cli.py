@@ -9,7 +9,7 @@ from zoneinfo import ZoneInfo
 import typer
 from dateutil.parser import isoparse
 
-from .ai_provider import resolve_ai_provider
+from .ai_provider import AIProviderRuntime, resolve_ai_provider
 from .config import Settings
 from .daily_guardrails import DailyPolicy, DailyPolicyError
 from .durable_checkpoint import SelectiveMemoryCheckpointStore
@@ -254,12 +254,23 @@ def _run_collection(
     rules_only: bool = False,
     relevance: Callable[[str], dict[str, bool]] | None = None,
 ) -> None:
-    issues = _manual_import_issues(settings)
+    issues = _manual_import_issues(settings, require_ai=not rules_only)
     if issues:
         raise typer.BadParameter("; ".join(issues))
 
     runtime_settings = _collector_runtime_settings(settings, run_mode=run_mode)
-    provider_runtime = resolve_ai_provider(runtime_settings)
+    if rules_only:
+        # Rules-only runs never construct an AI provider, so AI credentials are
+        # not required. Keep the resolved settings but skip AI validation.
+        provider_runtime = AIProviderRuntime(
+            backend=runtime_settings.ai_provider.strip().lower() or "none",
+            provider="rule-based",
+            model="idx-rules-v1",
+            settings=runtime_settings,
+            summarizer_factory=None,  # type: ignore[arg-type]
+        )
+    else:
+        provider_runtime = resolve_ai_provider(runtime_settings)
 
     checkpoint_backend = "local" if checkpoint is not None else "synapse"
     checkpoint_path: Path | None = None
