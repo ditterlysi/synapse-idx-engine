@@ -345,6 +345,8 @@ class SourceIngestionRunner:
                             stats.disclosures_created += 1
 
                 summarizer = None
+                ai_rate_limited = False
+                ai_run_deadline_exceeded = False
                 if not self.rules_only and any(
                     disclosure_statuses.get(item.external_id) != "READY" for item in local_items
                 ):
@@ -420,9 +422,6 @@ class SourceIngestionRunner:
                                     f"{disclosure.external_id}: could not mark PARTIAL: "
                                     f"{_truncate(str(status_exc), 400)}"
                                 )
-                else:
-                    ai_rate_limited = False
-                    ai_run_deadline_exceeded = False
                 for disclosure in local_items:
                     disclosure_id = disclosure_ids.get(disclosure.external_id)
                     if not disclosure_id:
