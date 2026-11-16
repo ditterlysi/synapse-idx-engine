@@ -423,6 +423,10 @@ class SourceIngestionRunner:
                                     f"{_truncate(str(status_exc), 400)}"
                                 )
                 for disclosure in local_items:
+                    if self.rules_only:
+                        # Rules-only disclosures were already classified above;
+                        # never enter the attachment/AI path without a summarizer.
+                        continue
                     disclosure_id = disclosure_ids.get(disclosure.external_id)
                     if not disclosure_id:
                         stats.partial_disclosures += 1
