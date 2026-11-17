@@ -110,12 +110,13 @@ class SourceStateSynapseClient(SynapseClient):
 
         Returns a mapping of ticker to ``{"in_portfolio": bool, "in_watchlist": bool}``.
         """
-        if not tickers:
+        normalized = sorted({ticker.strip().upper() for ticker in tickers if ticker.strip()})
+        if not normalized:
             return {}
         payload = self._request_without_model(
             "POST",
             "/api/internal/idx/relevance",
-            {"tickers": sorted({ticker.strip().upper() for ticker in tickers if ticker.strip()})},
+            {"tickers": normalized},
         )
         items = payload.get("items")
         if not isinstance(items, list):
