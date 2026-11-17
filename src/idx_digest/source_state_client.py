@@ -105,6 +105,34 @@ class SourceStateSynapseClient(SynapseClient):
         source_id = quote(self.source_id, safe="")
         return self._request_without_model("GET", f"/api/internal/idx/source-state?sourceId={source_id}")
 
+    def resolve_relevance(self, tickers: list[str]) -> dict[str, dict[str, bool]]:
+        """Ask Synapse which tickers the owner holds or watches.
+
+        Returns a mapping of ticker to ``{"in_portfolio": bool, "in_watchlist": bool}``.
+        """
+        if not tickers:
+            return {}
+        payload = self._request_without_model(
+            "POST",
+            "/api/internal/idx/relevance",
+            {"tickers": sorted({ticker.strip().upper() for ticker in tickers if ticker.strip()})},
+        )
+        items = payload.get("items")
+        if not isinstance(items, list):
+            raise ValueError("Synapse relevance API returned no items")
+        resolved: dict[str, dict[str, bool]] = {}
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            ticker = item.get("ticker")
+            if not isinstance(ticker, str):
+                continue
+            resolved[ticker.strip().upper()] = {
+                "in_portfolio": bool(item.get("isPortfolio") or item.get("inPortfolio")),
+                "in_watchlist": bool(item.get("isWatchlist") or item.get("inWatchlist")),
+            }
+        return resolved
+
     def _recover_stale_source_run(self) -> None:
         state = self.get_source_state()
         latest = state.get("latestAttempt")

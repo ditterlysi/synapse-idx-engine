@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import sys
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Callable
@@ -530,14 +531,35 @@ def daily(
         )
         raise typer.Exit(code=1) from exc
 
-    # Build relevance lookup once from CLI flags.
+    # Build relevance lookup from Synapse holdings/watchlist, with the CLI
+    # flags as override. Falls back to flag-only on any relevance-API failure
+    # so a relevance outage never stops scheduled collection.
     portfolio_set = {t.strip().upper() for t in in_portfolio.split(",") if t.strip()}
     watchlist_set = {t.strip().upper() for t in in_watchlist.split(",") if t.strip()}
+    synapse_relevance: dict[str, dict[str, bool]] = {}
 
     def relevance_lookup(ticker: str) -> dict[str, bool]:
+        key = ticker.strip().upper()
+        if key in portfolio_set or key in watchlist_set:
+            return {
+                "in_portfolio": key in portfolio_set,
+                "in_watchlist": key in watchlist_set,
+            }
+        entry = synapse_relevance.get(key)
+        if entry is None:
+            # The relevance endpoint resolves the tickers it receives, so ask
+            # for just the one we are classifying and remember the answer.
+            try:
+                with _source_state_client(settings) as state_client:
+                    entry = state_client.resolve_relevance([key]).get(key)
+            except Exception as exc:
+                print(f"[IDX] relevance lookup failed for {key}: {exc}", file=sys.stderr)
+                entry = None
+            synapse_relevance[key] = entry or {"in_portfolio": False, "in_watchlist": False}
+            entry = synapse_relevance[key]
         return {
-            "in_portfolio": ticker.strip().upper() in portfolio_set,
-            "in_watchlist": ticker.strip().upper() in watchlist_set,
+            "in_portfolio": entry.get("in_portfolio", False),
+            "in_watchlist": entry.get("in_watchlist", False),
         }
 
     _run_collection(
