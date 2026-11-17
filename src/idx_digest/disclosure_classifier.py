@@ -49,6 +49,11 @@ _CLASSIFICATION_RULES: tuple[tuple[tuple[str, ...], str], ...] = (
     (("delisting", "penghapusan dari daftar", "go private"), "DELISTING"),
     (("direksi", "komisaris", "manajemen", "komite nominasi"), "MANAGEMENT_CHANGE"),
     (("akuisisi", "acquisition"), "ACQUISITION"),
+    # Merger is significant, but its announcements are often titled
+    # "Penyampaian Bukti Iklan Informasi rencana penggabungan usaha (Merger)".
+    # That title also matches the routine "iklan"/"pemberitahuan" rule, so the
+    # merger patterns must be checked first.
+    (("penggabungan usaha", "merger", "konsolidasi usaha", "peleburan usaha"), "MERGER"),
     (("penjualan aset", "pengalihan aset"), "ASSET_TRANSACTION"),
     (("perkara hukum", "tuntutan hukum", "gugatan", "legal", "litigasi"), "LEGAL"),
     (("surat bebas tekanan", "regulasi", "surat pernyataan"), "REGULATORY"),

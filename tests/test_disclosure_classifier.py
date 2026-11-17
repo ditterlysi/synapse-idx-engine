@@ -69,6 +69,23 @@ def test_classify_disclosure_fallback() -> None:
     assert classify_disclosure("Peristiwa Biasa") == CLASSIFICATION_FALLBACK
 
 
+def test_classify_disclosure_merger_beats_routine_reporting_keywords() -> None:
+    """Merger titles also say "iklan"/"pemberitahuan"; MERGER must win."""
+    assert (
+        classify_disclosure(
+            "Penyampaian Bukti Iklan Informasi rencana penggabungan usaha (Merger)"
+        )
+        == "MERGER"
+    )
+    assert classify_disclosure("Rencana Merger PT A dan PT B") == "MERGER"
+    assert classify_disclosure("Peleburan Usaha Anak Perusahaan") == "MERGER"
+
+
+def test_merger_is_material_for_a_held_ticker() -> None:
+    assert materiality_for_disclosure("MERGER", in_portfolio=True, in_watchlist=False) == "HIGH"
+    assert materiality_for_disclosure("MERGER", in_portfolio=False, in_watchlist=True) == "MEDIUM"
+
+
 def test_materiality_portfolio_financial_report() -> None:
     assert materiality_for_disclosure("FINANCIAL_REPORT", in_portfolio=True, in_watchlist=False) == "HIGH"
 
