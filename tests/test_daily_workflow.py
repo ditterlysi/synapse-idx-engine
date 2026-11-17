@@ -17,7 +17,7 @@ def test_daily_workflow_keeps_production_guardrails() -> None:
     assert "tesseract-ocr-eng" in workflow
     assert "tesseract-ocr-ind" in workflow
     assert "set -o pipefail" in workflow
-    assert "synapse-idx-website daily --confirm-schedule | tee idx-daily-report.json" in workflow
+    assert "synapse-idx-website daily --confirm-schedule --rules-only | tee idx-daily-report.json" in workflow
     assert "cancel-in-progress: false" in workflow
     assert "actions: read" in workflow
     assert "contents: read" in workflow
