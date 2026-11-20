@@ -2,9 +2,10 @@ from __future__ import annotations
 
 import json
 import sys
+import time
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Callable
+from typing import Any, Callable
 from zoneinfo import ZoneInfo
 
 import typer
@@ -280,20 +281,32 @@ def _run_collection(
         checkpoint_path = checkpoint.expanduser().resolve()
         checkpoint_store = FileCheckpointStore(checkpoint_path)
     else:
-        try:
-            with _source_state_client(provider_runtime.settings) as state_client:
-                remote_state = state_client.get_source_state()
-            checkpoint_store = SelectiveMemoryCheckpointStore(
-                checkpoint_from_payload(remote_state.get("checkpoint")),
-                eligible_external_ids=checkpoint_eligible_external_ids,
-            )
-        except Exception as exc:
+        remote_state: dict[str, Any] | None = None
+        last_restore_error: Exception | None = None
+        # A web redeploy makes the internal source-state endpoint briefly
+        # unavailable (observed 503 during the 2026-11-19/20 cron window). The
+        # scheduled cron cannot move, so retry here instead of failing the run.
+        for attempt in range(1, 4):
+            try:
+                with _source_state_client(provider_runtime.settings) as state_client:
+                    remote_state = state_client.get_source_state()
+                break
+            except Exception as exc:
+                last_restore_error = exc
+                if attempt < 3:
+                    print(
+                        f"[IDX] source-state read failed (attempt {attempt}/3), retrying in 30s: {exc}",
+                        file=sys.stderr,
+                    )
+                    time.sleep(30)
+        if remote_state is None:
+            assert last_restore_error is not None
             typer.echo(
                 json.dumps(
                     {
                         "ok": False,
-                        "errorType": type(exc).__name__,
-                        "error": f"could not restore durable IDX checkpoint: {exc}",
+                        "errorType": type(last_restore_error).__name__,
+                        "error": f"could not restore durable IDX checkpoint: {last_restore_error}",
                         "checkpointBackend": "synapse",
                         "checkpointCommitted": False,
                         "checkpointProgressPreserved": False,
@@ -304,7 +317,11 @@ def _run_collection(
                     indent=2,
                 )
             )
-            raise typer.Exit(code=1) from exc
+            raise typer.Exit(code=1) from last_restore_error
+        checkpoint_store = SelectiveMemoryCheckpointStore(
+            checkpoint_from_payload(remote_state.get("checkpoint")),
+            eligible_external_ids=checkpoint_eligible_external_ids,
+        )
 
     staging_dir = (settings.data_dir / "idx-website-cache").expanduser().resolve()
     idx_client = PoliteFetchClient(
